@@ -5,7 +5,7 @@ from pulp import *
 st.set_page_config(page_title="Dream11 Multi-Team Optimizer", layout="centered")
 
 st.title("🏏 Dream11 Multi-Team Builder")
-st.write("Add your 22-24 players manually, set your structure, choose how many teams you want, and generate them instantly.")
+st.write("Add your 22-24 players manually, lock your favorite players into all teams, set your structure, and generate up to 40 unique team variations.")
 
 # Initialize a completely empty dataset structure
 if 'player_data' not in st.session_state:
@@ -26,18 +26,21 @@ with st.form("add_player_form", clear_on_submit=True):
     submit = st.form_submit_button("Add Player")
     if submit and p_name:
         st.session_state.player_data.append({
-            "Name": p_name, "Role": p_role, "Credits": p_credits, "Proj_Points": p_points, "Team": p_team
+            "Name": p_name, "Role": p_role, "Credits": p_credits, "Proj_Points": p_points, "Team": p_team, "Lock_In_All_Teams": False
         })
         st.success(f"Added {p_name} to the pool!")
 
-# Interactive Grid with Row Deletion Enabled
+# Interactive Grid with Row Deletion and Locking Enabled
 st.subheader("📋 Your Custom Player Pool")
+st.write("Check the **Lock_In_All_Teams** column for important players who must appear in every generated team:")
 
 if len(st.session_state.player_data) == 0:
-    st.info("Your pool is empty. Use the form above to add players, or click the '+' button inside the table below to start typing.")
-    df = pd.DataFrame(columns=["Name", "Role", "Credits", "Proj_Points", "Team"])
+    st.info("Your pool is empty. Use the form above to add players.")
+    df = pd.DataFrame(columns=["Name", "Role", "Credits", "Proj_Points", "Team", "Lock_In_All_Teams"])
 else:
     df = pd.DataFrame(st.session_state.player_data)
+    # Ensure column order is clean
+    df = df[["Name", "Role", "Credits", "Proj_Points", "Team", "Lock_In_All_Teams"]]
 
 edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
@@ -61,7 +64,7 @@ with col_ar:
 with col_bowl:
     target_bowl = st.slider("Bowlers (BOWL) wanted:", min_value=1, max_value=8, value=4)
 
-# NEW: Number of Teams Selector
+# Number of Teams Selector
 st.subheader("🤖 Generation Settings")
 num_teams_to_gen = st.number_input("How many unique teams do you want to generate?", min_value=1, max_value=40, value=10, step=1)
 
@@ -76,19 +79,24 @@ if st.button("🚀 Generate Teams", type="primary"):
     cleaned_df = cleaned_df[cleaned_df["Name"].astype(str).str.strip() != ""]
     cleaned_df = cleaned_df.reset_index(drop=True)
     
+    # Count locked players
+    total_locked = int(cleaned_df["Lock_In_All_Teams"].sum())
+    
     if total_requested_slots != 11:
         st.error(f"Your sliders add up to {total_requested_slots} players. They must add up to exactly 11 players before running the generator.")
     elif len(cleaned_df) < 11:
         st.error(f"You need to enter at least 11 players in your grid to generate a squad. Currently you have {len(cleaned_df)} rows.")
+    elif total_locked > 11:
+        st.error(f"You have locked {total_locked} players. You cannot lock more than 11 players into a team.")
     else:
-        # Array to hold all historically generated teams to enforce diversity
         generated_lineups = []
         
         # Define base Optimization Problem
         prob = LpProblem("Dream11_Multi_Maximizer", LpMaximize)
         
-        # SAFE SYNTAX FIX: Define variables using standard list iteration and explicit string naming
-        player_vars = [LpVariable(f"PVar_{i}", cat='Binary') for i in cleaned_df.index]
+        # ROCK-SOLID UNIVERSAL SYNTAX: Use LpVariable.matrix to prevent type errors across different library setups
+        player_indices = list(cleaned_df.index)
+        player_vars = LpVariable.matrix("PVar", player_indices, lowBound=0, upBound=1, cat=LpInteger)
         
         # Objective function (Maximize total points based on input)
         prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[i] for i in cleaned_df.index])
@@ -101,10 +109,16 @@ if st.button("🚀 Generate Teams", type="primary"):
         prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "AR"]) == target_ar
         prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BOWL"]) == target_bowl
             
+        # Maximum 10 players from a single real team
         teams = cleaned_df["Team"].unique()
         for t in teams:
             prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Team"] == t]) <= 10
             
+        # NEW CONSTRAINT: Enforce user selection locks for must-have selections
+        for i in cleaned_df.index:
+            if cleaned_df.loc[i, "Lock_In_All_Teams"] == True:
+                prob += player_vars[i] == 1
+                
         # Run loop to find multiple unique combinations
         for t_idx in range(1, num_teams_to_gen + 1):
             status = prob.solve(PULP_CBC_CMD(msg=False))
@@ -112,18 +126,21 @@ if st.button("🚀 Generate Teams", type="primary"):
             if LpStatus[status] == "Optimal":
                 selected_indices = [i for i in cleaned_df.index if player_vars[i].varValue == 1]
                 result_df = cleaned_df.loc[selected_indices].copy()
-                result_df = result_df.sort_values(by="Proj_Points", ascending=False).reset_index(drop=True)
+                
+                # Exclude the technical lock helper column from output layout to clean the presentation
+                display_df = result_df.drop(columns=["Lock_In_All_Teams"])
+                display_df = display_df.sort_values(by="Proj_Points", ascending=False).reset_index(drop=True)
                 
                 # Store the team results
-                generated_lineups.append((t_idx, result_df))
+                generated_lineups.append((t_idx, display_df))
                 
-                # Multi-team constraint block: Force next iteration to be different by outlawing this specific overlap combo
+                # Multi-team constraint block: Force next iteration to be different by limiting overlap combo
                 prob += lpSum([player_vars[i] for i in selected_indices]) <= 9
             else:
                 if t_idx == 1:
-                    st.error("No valid combination fits your constraints. Adjust your sliders or edit player credits.")
+                    st.error("No valid combination fits your constraints and locked players. Try unlocking some players, adjusting sliders, or editing credits.")
                 else:
-                    st.warning(f"Could only generate {len(generated_lineups)} unique teams with your current player pool data before running out of combinations.")
+                    st.warning(f"Could only generate {len(generated_lineups)} unique teams with your current setup before running out of combinations.")
                 break
         
         # Display all generated teams
