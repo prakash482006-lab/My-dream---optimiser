@@ -35,12 +35,10 @@ st.subheader("📋 Your Custom Player Pool")
 
 if len(st.session_state.player_data) == 0:
     st.info("Your pool is empty. Use the form above to add players, or click the '+' button inside the table below to start typing.")
-    # Show an empty structured layout
     df = pd.DataFrame(columns=["Name", "Role", "Credits", "Proj_Points", "Team"])
 else:
     df = pd.DataFrame(st.session_state.player_data)
 
-# num_rows="dynamic" enables both a "+" sign at the bottom and a trash can delete icon next to rows
 edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
 # Sync table modifications back to session state to prevent loss on reload
@@ -69,9 +67,12 @@ st.info(f"Total slots chosen: **{total_requested_slots} / 11**")
 
 # Optimization Run Button
 if st.button("🚀 Generate Custom Team", type="primary"):
-    # Clear out any empty rows the user might have clicked '+' on without writing text
-    cleaned_df = edited_df.dropna(subset=["Name"])
-    cleaned_df = cleaned_df[cleaned_df["Name"].str.strip() != ""]
+    # Clear out any empty rows or missing values safely
+    cleaned_df = edited_df.dropna(subset=["Name"]).copy()
+    cleaned_df = cleaned_df[cleaned_df["Name"].astype(str).str.strip() != ""]
+    
+    # Reset index so we can use clean numeric IDs for the optimization variables
+    cleaned_df = cleaned_df.reset_index(drop=True)
     
     if total_requested_slots != 11:
         st.error(f"Your sliders add up to {total_requested_slots} players. They must add up to exactly 11 players before running the generator.")
@@ -81,35 +82,36 @@ if st.button("🚀 Generate Custom Team", type="primary"):
         # Define Optimization Problem
         prob = LpProblem("Dream11_Custom_Maximizer", LpMaximize)
         
-        player_names = cleaned_df["Name"].tolist()
-        player_vars = LpVariable.dicts("Select", player_names, cat="Binary")
+        # Use row index integers instead of player names to avoid character/space dictionary errors
+        player_indices = list(cleaned_df.index)
+        player_vars = LpVariable.dicts("Select", player_indices, cat="Binary")
         
         # Objective function (Maximize total points based on input)
-        prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[cleaned_df.loc[i, "Name"]] for i in cleaned_df.index])
+        prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[i] for i in player_indices])
         
         # Rule 1: Total must equal 11
-        prob += lpSum([player_vars[name] for name in player_names]) == 11
+        prob += lpSum([player_vars[i] for i in player_indices]) == 11
         
         # Rule 2: Budget under 100 Credits
-        prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[cleaned_df.loc[i, "Name"]] for i in cleaned_df.index]) <= 100.0
+        prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[i] for i in player_indices]) <= 100.0
         
         # Rule 3: Dynamic user-defined constraints for each role
-        prob += lpSum([player_vars[cleaned_df.loc[i, "Name"]] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "WK"]) == target_wk
-        prob += lpSum([player_vars[cleaned_df.loc[i, "Name"]] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BAT"]) == target_bat
-        prob += lpSum([player_vars[cleaned_df.loc[i, "Name"]] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "AR"]) == target_ar
-        prob += lpSum([player_vars[cleaned_df.loc[i, "Name"]] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BOWL"]) == target_bowl
+        prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Role"] == "WK"]) == target_wk
+        prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Role"] == "BAT"]) == target_bat
+        prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Role"] == "AR"]) == target_ar
+        prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Role"] == "BOWL"]) == target_bowl
             
         # Rule 4: Maximum 10 players from a single real team
         teams = cleaned_df["Team"].unique()
         for t in teams:
-            prob += lpSum([player_vars[cleaned_df.loc[i, "Name"]] for i in cleaned_df.index if cleaned_df.loc[i, "Team"] == t]) <= 10
+            prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Team"] == t]) <= 10
             
         # Solve the math model
         status = prob.solve(PULP_CBC_CMD(msg=False))
         
         if LpStatus[status] == "Optimal":
-            selected_names = [name for name in player_names if player_vars[name].varValue == 1]
-            result_df = cleaned_df[cleaned_df["Name"].isin(selected_names)].copy()
+            selected_indices = [i for i in player_indices if player_vars[i].varValue == 1]
+            result_df = cleaned_df.loc[selected_indices].copy()
             
             # Sort by highest points to find best candidates for C and VC
             result_df = result_df.sort_values(by="Proj_Points", ascending=False).reset_index(drop=True)
