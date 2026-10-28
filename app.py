@@ -1,110 +1,112 @@
-import os
 import streamlit as st
 import pandas as pd
-from pulp import LpProblem, LpMaximize, LpVariable, lpSum, PULP_CBC_CMD
+from pulp import *
 
-st.set_page_config(page_title="Dream11 Auto-Team", page_icon="ðŸ", layout="centered")
+st.set_page_config(page_title="Dream11 Optimizer", layout="centered")
 
-st.title("ðŸ Dream11 Auto-Team Generator")
-st.write("Generate the mathematically optimal team within the 100-credit budget.")
+st.title("🏏 Dream11 Team Optimizer")
+st.write("Enter your player pool, select metrics, and generate the mathematically optimal 11-player team lineup instantly.")
 
-# Default Player Data Setup
-default_players = [
-    {"Name": "Virat Kohli", "Role": "BAT", "Credits": 10.5, "Form_Points": 85, "Team": "IND"},
-    {"Name": "Rohit Sharma", "Role": "BAT", "Credits": 10.0, "Form_Points": 78, "Team": "IND"},
-    {"Name": "Jasprit Bumrah", "Role": "BOWL", "Credits": 9.5, "Form_Points": 92, "Team": "IND"},
-    {"Name": "Hardik Pandya", "Role": "AR", "Credits": 9.0, "Form_Points": 65, "Team": "IND"},
-    {"Name": "Rishabh Pant", "Role": "WK", "Credits": 8.5, "Form_Points": 70, "Team": "IND"},
-    {"Name": "Travis Head", "Role": "BAT", "Credits": 9.5, "Form_Points": 88, "Team": "AUS"},
-    {"Name": "Glenn Maxwell", "Role": "AR", "Credits": 9.0, "Form_Points": 55, "Team": "AUS"},
-    {"Name": "Pat Cummins", "Role": "BOWL", "Credits": 9.0, "Form_Points": 74, "Team": "AUS"},
-    {"Name": "Mitchell Starc", "Role": "BOWL", "Credits": 8.5, "Form_Points": 60, "Team": "AUS"},
-    {"Name": "Adam Zampa", "Role": "BOWL", "Credits": 8.5, "Form_Points": 80, "Team": "AUS"},
-    {"Name": "Josh Inglis", "Role": "WK", "Credits": 8.0, "Form_Points": 50, "Team": "AUS"},
-    {"Name": "Yashasvi Jaiswal", "Role": "BAT", "Credits": 8.5, "Form_Points": 72, "Team": "IND"},
-    {"Name": "Ravindra Jadeja", "Role": "AR", "Credits": 9.0, "Form_Points": 62, "Team": "IND"},
-    {"Name": "Kuldeep Yadav", "Role": "BOWL", "Credits": 8.5, "Form_Points": 68, "Team": "IND"},
-    {"Name": "Mohammed Siraj", "Role": "BOWL", "Credits": 8.0, "Form_Points": 48, "Team": "IND"},
-    {"Name": "Marcus Stoinis", "Role": "AR", "Credits": 8.0, "Form_Points": 45, "Team": "AUS"},
-]
+# Initial Sample Dataset
+if 'player_data' not in st.session_state:
+    st.session_state.player_data = [
+        {"Name": "Player 1", "Role": "WK", "Credits": 9.0, "Proj_Points": 55, "Team": "IND"},
+        {"Name": "Player 2", "Role": "BAT", "Credits": 10.5, "Proj_Points": 70, "Team": "IND"},
+        {"Name": "Player 3", "Role": "BAT", "Credits": 9.5, "Proj_Points": 62, "Team": "AUS"},
+        {"Name": "Player 4", "Role": "AR", "Credits": 9.0, "Proj_Points": 58, "Team": "IND"},
+        {"Name": "Player 5", "Role": "AR", "Credits": 8.5, "Proj_Points": 50, "Team": "AUS"},
+        {"Name": "Player 6", "Role": "BOWL", "Credits": 8.5, "Proj_Points": 48, "Team": "AUS"},
+        {"Name": "Player 7", "Role": "BOWL", "Credits": 8.0, "Proj_Points": 45, "Team": "IND"},
+        {"Name": "Player 8", "Role": "WK", "Credits": 8.5, "Proj_Points": 40, "Team": "AUS"},
+        {"Name": "Player 9", "Role": "BAT", "Credits": 8.5, "Proj_Points": 42, "Team": "IND"},
+        {"Name": "Player 10", "Role": "BOWL", "Credits": 7.5, "Proj_Points": 38, "Team": "IND"},
+        {"Name": "Player 11", "Role": "BOWL", "Credits": 7.0, "Proj_Points": 35, "Team": "AUS"},
+        {"Name": "Player 12", "Role": "AR", "Credits": 9.0, "Proj_Points": 52, "Team": "AUS"},
+    ]
 
-# State Management for Dataframe
-if "df" not in st.session_state:
-    st.session_state.df = pd.DataFrame(default_players)
-
-st.subheader("1. Match Player Pool & Stats")
-st.write("Edit credits or Form Points directly in the table below:")
-
-# Editable Data Grid
-edited_df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
-st.session_state.df = edited_df
-
-# Add New Player Section
-with st.expander("âž• Add a New Player Quickly"):
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1: new_name = st.text_input("Name", "Player X")
-    with col2: new_role = st.selectbox("Role", ["WK", "BAT", "AR", "BOWL"])
-    with col3: new_credits = st.number_input("Credits", 1.0, 15.0, 8.5, 0.5)
-    with col4: new_pts = st.number_input("Form Points", 0, 200, 50, 5)
-    with col5: new_team = st.text_input("Team Code", "IND")
+# Form to add a new player manually
+st.subheader("➕ Add New Player")
+with st.form("add_player_form", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+    with col1:
+        p_name = st.text_input("Player Name")
+        p_role = st.selectbox("Role", ["WK", "BAT", "AR", "BOWL"])
+    with col2:
+        p_credits = st.number_input("Credits", min_value=1.0, max_value=20.0, value=9.0, step=0.5)
+        p_points = st.number_input("Projected Points", min_value=0, max_value=200, value=40)
+    p_team = st.text_input("Team Code (e.g., IND, AUS)", value="IND").upper()
     
-    if st.button("Add to Pool"):
-        new_row = pd.DataFrame([{"Name": new_name, "Role": new_role, "Credits": new_credits, "Form_Points": new_pts, "Team": new_team}])
-        st.session_state.df = pd.concat([st.session_state.df, new_row], ignore_index=True)
-        st.rerun()
+    submit = st.form_submit_with_categorical_features = st.form_submit_button("Add Player to Roster")
+    if submit and p_name:
+        st.session_state.player_data.append({
+            "Name": p_name, "Role": p_role, "Credits": p_credits, "Proj_Points": p_points, "Team": p_team
+        })
+        st.success(f"Added {p_name} successfully!")
 
-st.subheader("2. Run Optimizer")
-if st.button("âš¡ Generate Best Dream11 Lineup", type="primary"):
-    data = st.session_state.df.to_dict('records')
-    
-    # Mathematical Optimization using PuLP
-    prob = LpProblem("Dream11_Optimizer", LpMaximize)
-    player_vars = LpVariable.dicts("P", [p["Name"] for p in data], cat="Binary")
-    
-    # Objective: Maximize expected points
-    prob += lpSum([p["Form_Points"] * player_vars[p["Name"]] for p in data])
-    
-    # Core Constraints
-    prob += lpSum([player_vars[p["Name"]] for p in data]) == 11
-    prob += lpSum([p["Credits"] * player_vars[p["Name"]] for p in data]) <= 100.0
-    
-    # Position Constraints (Dream11 standard rules: 1-8 players per category)
-    for role in ["WK", "BAT", "AR", "BOWL"]:
-        prob += lpSum([player_vars[p["Name"]] for p in data if p["Role"] == role]) >= 1
-        prob += lpSum([player_vars[p["Name"]] for p in data if p["Role"] == role]) <= 8
-        
-    # Team Cap Constraint (Max 10 players from a single team under new rules)
-    teams = set([p["Team"] for p in data])
-    for team in teams:
-        prob += lpSum([player_vars[p["Name"]] for p in data if p["Team"] == team]) <= 10
+# Editable Interactive Grid
+st.subheader("📋 Current Player Pool")
+st.write("Double-tap values below to edit credits or points directly on your phone:")
+df = pd.DataFrame(st.session_state.player_data)
+edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
-    # Solve the problem
-    status = prob.solve(PULP_CBC_CMD(msg=False))
-    
-    if status == 1: # Optimal solution found
-        selected_players = [p for p in data if player_vars[p["Name"]].varValue == 1]
-        result_df = pd.DataFrame(selected_players)
-        
-        # Sort by Form Points to pick Captain and Vice-Captain
-        result_df = result_df.sort_values(by="Form_Points", ascending=False).reset_index(drop=True)
-        
-        st.success("ðŸŽ‰ Best 11-Player Team Generated Successfully!")
-        
-        # Display Key Summary Metrics
-        total_credits = result_df["Credits"].sum()
-        total_points = result_df["Form_Points"].sum()
-        
-        metric_col1, metric_col2 = st.columns(2)
-        metric_col1.metric("Total Budget Used", f"{total_credits} / 100 Credits")
-        metric_col2.metric("Total Projected Form Points", f"{total_points} Pts")
-        
-        # Highlight C and VC
-        st.subheader("ðŸ’¡ Recommended Captain & Vice-Captain")
-        st.info(f"ðŸ‘‘ **Captain (2x Points):** {result_df.loc[0, 'Name']} ({result_df.loc[0, 'Role']})
-
-ðŸƒ **Vice-Captain (1.5x Points):** {result_df.loc[1, 'Name']} ({result_df.loc[1, 'Role']})")
-        
-        st.subheader("ðŸ“‹ Selected Lineup")
-        st.dataframe(result_df[["Name", "Role", "Team", "Credits", "Form_Points"]], use_container_width=True)
+# Optimization Run Button
+if st.button("🚀 Generate Optimal Team", type="primary"):
+    if len(edited_df) < 11:
+        st.error("You must have at least 11 players in the list to build a team.")
     else:
-        st.error("Could not find a valid team setup. Check your budget or criteria adjustments.")
+        # Define Optimization Problem
+        prob = LpProblem("Dream11_Maximizer", LpMaximize)
+        
+        # Decision dictionary
+        player_names = edited_df["Name"].tolist()
+        player_vars = LpVariable.dicts("Select", player_names, cat="Binary")
+        
+        # Objective function (Maximize points)
+        prob += lpSum([edited_df.loc[i, "Proj_Points"] * player_vars[edited_df.loc[i, "Name"]] for i in edited_df.index])
+        
+        # Rule 1: Exactly 11 players
+        prob += lpSum([player_vars[name] for name in player_names]) == 11
+        
+        # Rule 2: Under 100 Credits budget
+        prob += lpSum([edited_df.loc[i, "Credits"] * player_vars[edited_df.loc[i, "Name"]] for i in edited_df.index]) <= 100.0
+        
+        # Rule 3: Balance constraints (1 to 8 players per position role)
+        for role in ["WK", "BAT", "AR", "BOWL"]:
+            prob += lpSum([player_vars[edited_df.loc[i, "Name"]] for i in edited_df.index if edited_df.loc[i, "Role"] == role]) >= 1
+            prob += lpSum([player_vars[edited_df.loc[i, "Name"]] for i in edited_df.index if edited_df.loc[i, "Role"] == role]) <= 8
+            
+        # Rule 4: Maximum 10 players from a single real team
+        teams = edited_df["Team"].unique()
+        for t in teams:
+            prob += lpSum([player_vars[edited_df.loc[i, "Name"]] for i in edited_df.index if edited_df.loc[i, "Team"] == t]) <= 10
+            
+        # Solve the math model
+        status = prob.solve(PULP_CBC_CMD(msg=False))
+        
+        if LpStatus[status] == "Optimal":
+            selected_names = [name for name in player_names if player_vars[name].varValue == 1]
+            result_df = edited_df[edited_df["Name"].isin(selected_names)].copy()
+            
+            # Sort by points to find highest projected performers for captaincy recommendation
+            result_df = result_df.sort_values(by="Proj_Points", ascending=False).reset_index(drop=True)
+            
+            st.subheader("🔥 Your Automated Dream11 Lineup")
+            st.dataframe(result_df, use_container_width=True)
+            
+            # Key statistics display
+            total_credits = result_df["Credits"].sum()
+            total_points = result_df["Proj_Points"].sum()
+            
+            st.metric("Total Credits Used", f"{total_credits} / 100")
+            st.metric("Total Projected Performance Points", f"{total_points}")
+            
+            # Smart Recommendations for C and VC based on point distributions
+            if len(result_df) >= 2:
+                c_name = result_df.loc[0, "Name"]
+                c_role = result_df.loc[0, "Role"]
+                vc_name = result_df.loc[1, "Name"]
+                vc_role = result_df.loc[1, "Role"]
+                st.info(f"👑 **Captain (2x Points):** {c_name} ({c_role})")
+                st.info(f"✨ **Vice-Captain (1.5x Points):** {vc_name} ({vc_role})")
+        else:
+            st.error("No valid combination fits within the 100-credit budget. Try editing your player credit values.")
