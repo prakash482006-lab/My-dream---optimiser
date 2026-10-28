@@ -82,11 +82,12 @@ if st.button("🚀 Generate Custom Team", type="primary"):
         # Define Optimization Problem
         prob = LpProblem("Dream11_Custom_Maximizer", LpMaximize)
         
-        # FIXED: Explicit lower and upper bound configuration to completely bypass any library type conflicts.
+        # FIXED: Using positional arguments and the core library constant `LpBinary` 
+        # to ensure compatibility across all PuLP installations.
         player_vars = {}
         for i in cleaned_df.index:
             var_name = f"Select_{i}"
-            player_vars[i] = LpVariable(name=var_name, lowBound=0, upBound=1, cat="Integer")
+            player_vars[i] = LpVariable(var_name, 0, 1, LpBinary)
         
         # Objective function (Maximize total points based on input)
         prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[i] for i in cleaned_df.index])
