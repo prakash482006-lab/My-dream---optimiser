@@ -2,10 +2,10 @@ import streamlit as st
 import pandas as pd
 from pulp import *
 
-st.set_page_config(page_title="Dream11 Custom Optimizer", layout="centered")
+st.set_page_config(page_title="Dream11 Multi-Team Optimizer", layout="centered")
 
-st.title("🏏 Dream11 Custom Team Builder")
-st.write("Add your 22-24 players manually, set your positions, and let the math solver build the perfect 11.")
+st.title("🏏 Dream11 Multi-Team Builder")
+st.write("Add your 22-24 players manually, set your structure, choose how many teams you want, and generate them instantly.")
 
 # Initialize a completely empty dataset structure
 if 'player_data' not in st.session_state:
@@ -61,75 +61,78 @@ with col_ar:
 with col_bowl:
     target_bowl = st.slider("Bowlers (BOWL) wanted:", min_value=1, max_value=8, value=4)
 
+# NEW: Number of Teams Selector
+st.subheader("🤖 Generation Settings")
+num_teams_to_gen = st.number_input("How many unique teams do you want to generate?", min_value=1, max_value=40, value=10, step=1)
+
 # Validation check to ensure selections add up to 11
 total_requested_slots = target_wk + target_bat + target_ar + target_bowl
-st.info(f"Total slots chosen: **{total_requested_slots} / 11**")
+st.info(f"Total slots chosen per team: **{total_requested_slots} / 11**")
 
 # Optimization Run Button
-if st.button("🚀 Generate Custom Team", type="primary"):
-    # Clear out any empty rows or missing values safely
+if st.button("🚀 Generate Teams", type="primary"):
+    # Clear out any empty rows safely
     cleaned_df = edited_df.dropna(subset=["Name"]).copy()
     cleaned_df = cleaned_df[cleaned_df["Name"].astype(str).str.strip() != ""]
-    
-    # Reset index so we have clean numbers 0, 1, 2...
     cleaned_df = cleaned_df.reset_index(drop=True)
     
     if total_requested_slots != 11:
         st.error(f"Your sliders add up to {total_requested_slots} players. They must add up to exactly 11 players before running the generator.")
     elif len(cleaned_df) < 11:
-        st.error(f"You need to enter at least 11 players in your grid to generate a squad. Currently you have {len(cleaned_df)} complete rows.")
+        st.error(f"You need to enter at least 11 players in your grid to generate a squad. Currently you have {len(cleaned_df)} rows.")
     else:
-        # Define Optimization Problem
-        prob = LpProblem("Dream11_Custom_Maximizer", LpMaximize)
+        # Array to hold all historically generated teams to enforce diversity
+        generated_lineups = []
         
-        # FIXED: Using positional arguments and the core library constant `LpBinary` 
-        # to ensure compatibility across all PuLP installations.
-        player_vars = {}
-        for i in cleaned_df.index:
-            var_name = f"Select_{i}"
-            player_vars[i] = LpVariable(var_name, 0, 1, LpBinary)
+        # Define base Optimization Problem
+        prob = LpProblem("Dream11_Multi_Maximizer", LpMaximize)
+        
+        # SAFE SYNTAX FIX: Define variables using standard list iteration and explicit string naming
+        player_vars = [LpVariable(f"PVar_{i}", cat='Binary') for i in cleaned_df.index]
         
         # Objective function (Maximize total points based on input)
         prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[i] for i in cleaned_df.index])
         
-        # Rule 1: Total must equal 11
+        # Core Constraints
         prob += lpSum([player_vars[i] for i in cleaned_df.index]) == 11
-        
-        # Rule 2: Budget under 100 Credits
         prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[i] for i in cleaned_df.index]) <= 100.0
-        
-        # Rule 3: Dynamic user-defined constraints for each role
         prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "WK"]) == target_wk
         prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BAT"]) == target_bat
         prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "AR"]) == target_ar
         prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BOWL"]) == target_bowl
             
-        # Rule 4: Maximum 10 players from a single real team
         teams = cleaned_df["Team"].unique()
         for t in teams:
             prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Team"] == t]) <= 10
             
-        # Solve the math model
-        status = prob.solve(PULP_CBC_CMD(msg=False))
+        # Run loop to find multiple unique combinations
+        for t_idx in range(1, num_teams_to_gen + 1):
+            status = prob.solve(PULP_CBC_CMD(msg=False))
+            
+            if LpStatus[status] == "Optimal":
+                selected_indices = [i for i in cleaned_df.index if player_vars[i].varValue == 1]
+                result_df = cleaned_df.loc[selected_indices].copy()
+                result_df = result_df.sort_values(by="Proj_Points", ascending=False).reset_index(drop=True)
+                
+                # Store the team results
+                generated_lineups.append((t_idx, result_df))
+                
+                # Multi-team constraint block: Force next iteration to be different by outlawing this specific overlap combo
+                prob += lpSum([player_vars[i] for i in selected_indices]) <= 9
+            else:
+                if t_idx == 1:
+                    st.error("No valid combination fits your constraints. Adjust your sliders or edit player credits.")
+                else:
+                    st.warning(f"Could only generate {len(generated_lineups)} unique teams with your current player pool data before running out of combinations.")
+                break
         
-        if LpStatus[status] == "Optimal":
-            selected_indices = [i for i in cleaned_df.index if player_vars[i].varValue == 1]
-            result_df = cleaned_df.loc[selected_indices].copy()
+        # Display all generated teams
+        if generated_lineups:
+            st.success(f"Successfully generated {len(generated_lineups)} unique team lineups!")
             
-            # Sort by highest points to find best candidates for C and VC
-            result_df = result_df.sort_values(by="Proj_Points", ascending=False).reset_index(drop=True)
-            
-            st.subheader("🔥 Your Tailored Dream11 Lineup")
-            st.dataframe(result_df, use_container_width=True)
-            
-            total_credits = result_df["Credits"].sum()
-            total_points = result_df["Proj_Points"].sum()
-            
-            st.metric("Total Credits Used", f"{total_credits} / 100")
-            st.metric("Total Projected Points", f"{total_points}")
-            
-            if len(result_df) >= 2:
-                st.success(f"👑 **Captain (2x Points):** {result_df.loc[0, 'Name']} ({result_df.loc[0, 'Role']})")
-                st.success(f"✨ **Vice-Captain (1.5x Points):** {result_df.loc[1, 'Name']} ({result_df.loc[1, 'Role']})")
-        else:
-            st.error("No valid combination of your entered players matches your exact position requirements while staying under the 100-credit budget. Try adjusting the sliders or editing the credit costs in the grid.")
+            for t_num, team_df in generated_lineups:
+                with st.expander(f"📋 TEAM {t_num} (Estimated Points: {team_df['Proj_Points'].sum()} | Credits: {team_df['Credits'].sum()})"):
+                    st.dataframe(team_df, use_container_width=True)
+                    
+                    if len(team_df) >= 2:
+                        st.info(f"👑 **Captain:** {team_df.loc[0, 'Name']} | ✨ **Vice-Captain:** {team_df.loc[1, 'Name']}")
