@@ -71,7 +71,7 @@ if st.button("🚀 Generate Custom Team", type="primary"):
     cleaned_df = edited_df.dropna(subset=["Name"]).copy()
     cleaned_df = cleaned_df[cleaned_df["Name"].astype(str).str.strip() != ""]
     
-    # Reset index so we can use clean numeric IDs for the optimization variables
+    # Reset index so we have clean numbers 0, 1, 2...
     cleaned_df = cleaned_df.reset_index(drop=True)
     
     if total_requested_slots != 11:
@@ -82,35 +82,38 @@ if st.button("🚀 Generate Custom Team", type="primary"):
         # Define Optimization Problem
         prob = LpProblem("Dream11_Custom_Maximizer", LpMaximize)
         
-        # Use row index integers instead of player names to avoid character/space dictionary errors
-        player_indices = list(cleaned_df.index)
-        player_vars = LpVariable.dicts("Select", player_indices, cat="Binary")
+        # Create a list of string IDs like ['P0', 'P1', 'P2'...] to bypass the PuLP dictionary bug
+        player_keys = [f"P{i}" for i in cleaned_df.index]
+        player_vars = LpVariable.dicts("Select", player_keys, cat="Binary")
+        
+        # Mapping helpers to link back to index numbers easily
+        idx_to_key = {i: f"P{i}" for i in cleaned_df.index}
         
         # Objective function (Maximize total points based on input)
-        prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[i] for i in player_indices])
+        prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[idx_to_key[i]] for i in cleaned_df.index])
         
         # Rule 1: Total must equal 11
-        prob += lpSum([player_vars[i] for i in player_indices]) == 11
+        prob += lpSum([player_vars[key] for key in player_keys]) == 11
         
         # Rule 2: Budget under 100 Credits
-        prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[i] for i in player_indices]) <= 100.0
+        prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[idx_to_key[i]] for i in cleaned_df.index]) <= 100.0
         
         # Rule 3: Dynamic user-defined constraints for each role
-        prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Role"] == "WK"]) == target_wk
-        prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Role"] == "BAT"]) == target_bat
-        prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Role"] == "AR"]) == target_ar
-        prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Role"] == "BOWL"]) == target_bowl
+        prob += lpSum([player_vars[idx_to_key[i]] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "WK"]) == target_wk
+        prob += lpSum([player_vars[idx_to_key[i]] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BAT"]) == target_bat
+        prob += lpSum([player_vars[idx_to_key[i]] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "AR"]) == target_ar
+        prob += lpSum([player_vars[idx_to_key[i]] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BOWL"]) == target_bowl
             
         # Rule 4: Maximum 10 players from a single real team
         teams = cleaned_df["Team"].unique()
         for t in teams:
-            prob += lpSum([player_vars[i] for i in player_indices if cleaned_df.loc[i, "Team"] == t]) <= 10
+            prob += lpSum([player_vars[idx_to_key[i]] for i in cleaned_df.index if cleaned_df.loc[i, "Team"] == t]) <= 10
             
         # Solve the math model
         status = prob.solve(PULP_CBC_CMD(msg=False))
         
         if LpStatus[status] == "Optimal":
-            selected_indices = [i for i in player_indices if player_vars[i].varValue == 1]
+            selected_indices = [i for i in cleaned_df.index if player_vars[idx_to_key[i]].varValue == 1]
             result_df = cleaned_df.loc[selected_indices].copy()
             
             # Sort by highest points to find best candidates for C and VC
