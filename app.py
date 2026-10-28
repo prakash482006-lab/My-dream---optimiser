@@ -82,12 +82,11 @@ if st.button("🚀 Generate Custom Team", type="primary"):
         # Define Optimization Problem
         prob = LpProblem("Dream11_Custom_Maximizer", LpMaximize)
         
-        # FIXED: Avoid LpVariable.dicts completely to prevent library AttributeErrors.
-        # Create individual LpVariable entries manually in a standard dictionary map.
+        # FIXED: Explicit lower and upper bound configuration to completely bypass any library type conflicts.
         player_vars = {}
         for i in cleaned_df.index:
             var_name = f"Select_{i}"
-            player_vars[i] = LpVariable(name=var_name, cat="Binary")
+            player_vars[i] = LpVariable(name=var_name, lowBound=0, upBound=1, cat="Integer")
         
         # Objective function (Maximize total points based on input)
         prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[i] for i in cleaned_df.index])
