@@ -10,17 +10,19 @@ from pulp import (
 )
 
 st.set_page_config(
-    page_title="Dream11 Dual-Mode Optimizer",
+    page_title="Dream11 Dual-Team Combination Optimizer",
     layout="centered",
 )
 
-st.title("🏏 Dream11 Multi-Team Builder")
+st.title("🏏 Dream11 Two-Team Combination Builder")
 st.write(
-    "Add your 22-24 players manually. Choose either Player Lock mode or "
-    "Target Sliders mode to build up to 40 unique team variations."
+    "Add 22 players: 11 from Team A and 11 from Team B. "
+    "Then generate 11-player combinations using a chosen split, "
+    "such as 6 from Team A + 5 from Team B."
 )
 
 ROLES = ["WK", "BAT", "AR", "BOWL"]
+TEAM_OPTIONS = ["Team A", "Team B"]
 
 # ----------------------------
 # Session state
@@ -34,13 +36,14 @@ if "player_data" not in st.session_state:
 st.subheader("➕ Add Player to Pool")
 
 with st.form("add_player_form", clear_on_submit=True):
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         p_name = st.text_input("Player Name")
         p_role = st.selectbox("Role / Position", ROLES)
 
     with col2:
+        p_team = st.selectbox("Original Team", TEAM_OPTIONS)
         p_credits = st.number_input(
             "Credits cost",
             min_value=1.0,
@@ -49,7 +52,10 @@ with st.form("add_player_form", clear_on_submit=True):
             step=0.5,
         )
 
-    submitted = st.form_submit_button("Add Player")
+    with col3:
+        st.write("")
+        st.write("")
+        submitted = st.form_submit_button("Add Player")
 
     if submitted:
         if p_name.strip():
@@ -57,6 +63,7 @@ with st.form("add_player_form", clear_on_submit=True):
                 {
                     "Name": p_name.strip(),
                     "Role": p_role,
+                    "Team": p_team,
                     "Credits": float(p_credits),
                     "Lock_In_All_Teams": False,
                 }
@@ -74,12 +81,24 @@ if len(st.session_state.player_data) == 0:
     st.info("Your pool is empty. Use the form above to add players.")
 
     player_df = pd.DataFrame(
-        columns=["Name", "Role", "Credits", "Lock_In_All_Teams"]
+        columns=[
+            "Name",
+            "Role",
+            "Team",
+            "Credits",
+            "Lock_In_All_Teams",
+        ]
     )
 else:
     player_df = pd.DataFrame(st.session_state.player_data)
     player_df = player_df[
-        ["Name", "Role", "Credits", "Lock_In_All_Teams"]
+        [
+            "Name",
+            "Role",
+            "Team",
+            "Credits",
+            "Lock_In_All_Teams",
+        ]
     ]
 
 edited_df = st.data_editor(
@@ -89,7 +108,6 @@ edited_df = st.data_editor(
     key="player_pool_editor",
 )
 
-# Save edits back to session state
 st.session_state.player_data = edited_df.to_dict("records")
 
 # ----------------------------
@@ -100,23 +118,66 @@ st.subheader("🛠️ Choose Strategy Mode")
 optimizer_mode = st.radio(
     "Select which strategy rule to enforce for this generation:",
     [
+        "🔀 Two-Team Combination Mode (Recommended)",
         "🔒 Lock Mode (Force specific players into all teams)",
         "🎛️ Sliders Mode (Enforce exact position counts)",
     ],
     index=0,
 )
 
+team_a_count = 6
+team_b_count = 5
+
 target_wk = 1
 target_bat = 3
 target_ar = 3
 target_bowl = 4
 
-if "🔒 Lock Mode" in optimizer_mode:
+if "🔀 Two-Team Combination Mode" in optimizer_mode:
+
+    st.info(
+        "💡 **Active Strategy:** Choose how many players to take from "
+        "Team A and Team B. The optimizer will always create 11-player "
+        "teams within 100 credits."
+    )
+
+    split_option = st.selectbox(
+        "Choose Team A + Team B split:",
+        [
+            "6 from Team A + 5 from Team B",
+            "5 from Team A + 6 from Team B",
+            "7 from Team A + 4 from Team B",
+            "4 from Team A + 7 from Team B",
+            "8 from Team A + 3 from Team B",
+            "3 from Team A + 8 from Team B",
+        ],
+        index=0,
+    )
+
+    split_map = {
+        "6 from Team A + 5 from Team B": (6, 5),
+        "5 from Team A + 6 from Team B": (5, 6),
+        "7 from Team A + 4 from Team B": (7, 4),
+        "4 from Team A + 7 from Team B": (4, 7),
+        "8 from Team A + 3 from Team B": (8, 3),
+        "3 from Team A + 8 from Team B": (3, 8),
+    }
+
+    team_a_count, team_b_count = split_map[split_option]
+
+    st.success(
+        f"Each generated team will contain "
+        f"**{team_a_count} players from Team A** and "
+        f"**{team_b_count} players from Team B**."
+    )
+
+elif "🔒 Lock Mode" in optimizer_mode:
     st.info(
         "💡 **Active Strategy:** The engine will force your selected "
         "'Lock' players into all lineups and automatically balance the "
         "remaining slots using Dream11 standard rules."
     )
+
 else:
     st.info(
         "💡 **Active Strategy:** The engine will ignore lock checkboxes "
@@ -206,9 +267,30 @@ if st.button("🚀 Generate Teams", type="primary"):
         .astype(bool)
     )
 
+    cleaned_df["Team"] = cleaned_df["Team"].fillna("Team A")
+
     total_locked = int(cleaned_df["Lock_In_All_Teams"].sum())
 
-    if "🎛️ Sliders Mode" in optimizer_mode:
+    team_a_players = cleaned_df[cleaned_df["Team"] == "Team A"]
+    team_b_players = cleaned_df[cleaned_df["Team"] == "Team B"]
+
+    if "🔀 Two-Team Combination Mode" in optimizer_mode:
+
+        if len(team_a_players) < team_a_count:
+            st.error(
+                f"You need at least {team_a_count} players marked as "
+                f"Team A. You currently have {len(team_a_players)}."
+            )
+            st.stop()
+
+        if len(team_b_players) < team_b_count:
+            st.error(
+                f"You need at least {team_b_count} players marked as "
+                f"Team B. You currently have {len(team_b_players)}."
+            )
+            st.stop()
+
+    elif "🎛️ Sliders Mode" in optimizer_mode:
         total_requested_slots = (
             target_wk + target_bat + target_ar + target_bowl
         )
@@ -240,19 +322,18 @@ if st.button("🚀 Generate Teams", type="primary"):
                 LpMaximize,
             )
 
-            # Version-safe binary decision variables
             player_vars = {
                 str(i): LpVariable(f"choice_{i}", cat="Binary")
                 for i in cleaned_df.index
             }
 
-            # Objective: use maximum credits without exceeding 100
+            # Objective: maximize credits used, while staying within 100
             prob += lpSum(
                 cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
                 for i in cleaned_df.index
             )
 
-            # Exactly 11 players
+            # Exactly 11 players in every generated team
             prob += lpSum(
                 player_vars[str(i)]
                 for i in cleaned_df.index
@@ -264,7 +345,32 @@ if st.button("🚀 Generate Teams", type="primary"):
                 for i in cleaned_df.index
             ) <= 100.0
 
-            if "🎛️ Sliders Mode" in optimizer_mode:
+            if "🔀 Two-Team Combination Mode" in optimizer_mode:
+
+                prob += lpSum(
+                    player_vars[str(i)]
+                    for i in cleaned_df.index
+                    if cleaned_df.loc[i, "Team"] == "Team A"
+                ) == team_a_count
+
+                prob += lpSum(
+                    player_vars[str(i)]
+                    for i in cleaned_df.index
+                    if cleaned_df.loc[i, "Team"] == "Team B"
+                ) == team_b_count
+
+                # Keep normal Dream11 role balance
+                for role in ROLES:
+                    role_count = lpSum(
+                        player_vars[str(i)]
+                        for i in cleaned_df.index
+                        if cleaned_df.loc[i, "Role"] == role
+                    )
+
+                    prob += role_count >= 1
+                    prob += role_count <= 8
+
+            elif "🎛️ Sliders Mode" in optimizer_mode:
 
                 role_targets = {
                     "WK": target_wk,
@@ -296,8 +402,7 @@ if st.button("🚀 Generate Teams", type="primary"):
                     if bool(cleaned_df.loc[i, "Lock_In_All_Teams"]):
                         prob += player_vars[str(i)] == 1
 
-            # Make each new team different from previous teams.
-            # A new team can share maximum 8 players with any earlier team.
+            # Ensure each new team differs from previous teams
             for previous_team in previous_teams:
                 prob += lpSum(
                     player_vars[str(i)]
@@ -310,7 +415,7 @@ if st.button("🚀 Generate Teams", type="primary"):
                 if team_number == 1:
                     st.error(
                         "No valid combination matches your selected strategy. "
-                        "Check player credits, roles, locks, or slider values."
+                        "Check player credits, roles, teams, locks, or split."
                     )
                 else:
                     st.warning(
@@ -342,9 +447,13 @@ if st.button("🚀 Generate Teams", type="primary"):
         for team_number, team_df in generated_lineups:
             credits_used = team_df["Credits"].sum()
 
+            team_a_selected = int((team_df["Team"] == "Team A").sum())
+            team_b_selected = int((team_df["Team"] == "Team B").sum())
+
             with st.expander(
-                f"📋 TEAM {team_number} "
-                f"(Total Credits Used: {credits_used:.1f} / 100)"
+                f"📋 TEAM {team_number} | "
+                f"Team A: {team_a_selected} | Team B: {team_b_selected} | "
+                f"Credits: {credits_used:.1f} / 100"
             ):
                 st.dataframe(team_df, use_container_width=True)
 
