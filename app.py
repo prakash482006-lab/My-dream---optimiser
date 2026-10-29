@@ -103,10 +103,10 @@ if st.button("🚀 Generate Teams", type="primary"):
         generated_lineups = []
         prob = LpProblem("Dream11_DualMode_Maximizer", LpMaximize)
         
-        # BULLETPROOF SYNTAX FIX: Use the native LpVariable.dict tool with standard string lists.
-        # This completely resolves internal signature errors across modern Python environments.
+        # FIXED: Corrected spelling to native `LpVariable.dicts` with precise parameters.
+        # String indices ensure it won't conflict with library types.
         player_indices_str = [str(i) for i in cleaned_df.index]
-        player_vars = LpVariable.dict("choice", player_indices_str, 0, 1, LpBinary)
+        player_vars = LpVariable.dicts("choice", player_indices_str, cat="Binary")
             
         prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[str(i)] for i in cleaned_df.index])
         
