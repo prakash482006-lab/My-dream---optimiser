@@ -30,6 +30,9 @@ TEAM_OPTIONS = ["Team A", "Team B"]
 if "player_data" not in st.session_state:
     st.session_state.player_data = []
 
+if "pool_version" not in st.session_state:
+    st.session_state.pool_version = 0
+
 # ----------------------------
 # Add player form
 # ----------------------------
@@ -95,23 +98,32 @@ if len(st.session_state.player_data) == 0:
     )
 else:
     player_df = pd.DataFrame(st.session_state.player_data)
-    player_df = player_df[
-        [
-            "Name",
-            "Role",
-            "Team",
-            "Credits",
-            "Lock_In_All_Teams",
-            "Captain",
-            "Vice_Captain",
-        ]
+
+    required_columns = [
+        "Name",
+        "Role",
+        "Team",
+        "Credits",
+        "Lock_In_All_Teams",
+        "Captain",
+        "Vice_Captain",
     ]
+
+    for column in required_columns:
+        if column not in player_df.columns:
+            player_df[column] = False
+
+    player_df = player_df[required_columns]
+
+# Important: this key changes after loading a saved pool,
+# so Streamlit displays the newly loaded players correctly.
+player_editor_key = f"player_pool_editor_{st.session_state.pool_version}"
 
 edited_df = st.data_editor(
     player_df,
     num_rows="dynamic",
     use_container_width=True,
-    key="player_pool_editor",
+    key=player_editor_key,
     column_config={
         "Lock_In_All_Teams": st.column_config.CheckboxColumn(
             "Lock",
@@ -165,8 +177,12 @@ with load_col:
         try:
             loaded_data = json.load(uploaded_pool)
 
-            if isinstance(loaded_data, list):
+            if isinstance(loaded_data, list) and len(loaded_data) > 0:
                 st.session_state.player_data = loaded_data
+
+                # Change editor key so the loaded players appear properly
+                st.session_state.pool_version += 1
+
                 st.success(
                     f"Loaded {len(loaded_data)} players successfully!"
                 )
@@ -299,8 +315,7 @@ else:
 # ----------------------------
 # Unique team setting
 # ----------------------------
-# This setting is fixed to generate the maximum number of teams.
-# A new team can share maximum 8 players with any previous team.
+# Fixed setting to generate maximum possible teams.
 max_allowed_overlap = 8
 
 # ----------------------------
@@ -311,7 +326,7 @@ st.subheader("🤖 Generation Settings")
 num_teams_to_gen = st.number_input(
     "Maximum number of unique teams to generate:",
     min_value=1,
-    max_value=40,
+    max_value=100,
     value=20,
     step=1,
 )
@@ -484,9 +499,7 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
                 for i in cleaned_df.index
             ) <= 100.0
 
-            # ----------------------------
-            # Locked players: forced into every team
-            # ----------------------------
+            # Locked players must appear in every team
             for i in cleaned_df.index:
                 if bool(cleaned_df.loc[i, "Lock_In_All_Teams"]):
                     prob += player_vars[str(i)] == 1
