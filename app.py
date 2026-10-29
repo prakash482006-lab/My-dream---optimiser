@@ -1,9 +1,18 @@
 import streamlit as st
 import pandas as pd
-import pulp
-from pulp import LpProblem, LpMaximize, LpVariable, lpSum, PULP_CBC_CMD, LpStatus
+from pulp import (
+    LpProblem,
+    LpMaximize,
+    LpVariable,
+    lpSum,
+    PULP_CBC_CMD,
+    LpStatus,
+)
 
-st.set_page_config(page_title="Dream11 Dual-Mode Optimizer", layout="centered")
+st.set_page_config(
+    page_title="Dream11 Dual-Mode Optimizer",
+    layout="centered",
+)
 
 st.title("🏏 Dream11 Multi-Team Builder")
 st.write(
@@ -80,7 +89,7 @@ edited_df = st.data_editor(
     key="player_pool_editor",
 )
 
-# Save edits back into session state
+# Save edits back to session state
 st.session_state.player_data = edited_df.to_dict("records")
 
 # ----------------------------
@@ -97,7 +106,10 @@ optimizer_mode = st.radio(
     index=0,
 )
 
-target_wk, target_bat, target_ar, target_bowl = 1, 3, 3, 4
+target_wk = 1
+target_bat = 3
+target_ar = 3
+target_bowl = 4
 
 if "🔒 Lock Mode" in optimizer_mode:
     st.info(
@@ -169,7 +181,7 @@ num_teams_to_gen = st.number_input(
 )
 
 # ----------------------------
-# Optimizer
+# Generate teams
 # ----------------------------
 if st.button("🚀 Generate Teams", type="primary"):
 
@@ -184,11 +196,14 @@ if st.button("🚀 Generate Teams", type="primary"):
         st.stop()
 
     cleaned_df["Credits"] = pd.to_numeric(
-        cleaned_df["Credits"], errors="coerce"
+        cleaned_df["Credits"],
+        errors="coerce",
     ).fillna(0.0)
 
     cleaned_df["Lock_In_All_Teams"] = (
-        cleaned_df["Lock_In_All_Teams"].fillna(False).astype(bool)
+        cleaned_df["Lock_In_All_Teams"]
+        .fillna(False)
+        .astype(bool)
     )
 
     total_locked = int(cleaned_df["Lock_In_All_Teams"].sum())
@@ -216,100 +231,125 @@ if st.button("🚀 Generate Teams", type="primary"):
     generated_lineups = []
     previous_teams = []
 
-    progress_bar = st.progress(0, text="Generating teams...")
+    with st.spinner("Generating unique teams..."):
 
-    for team_number in range(1, num_teams_to_gen + 1):
+        for team_number in range(1, num_teams_to_gen + 1):
 
-        prob = LpProblem(f"Dream11_Team_{team_number}", LpMaximize)
+            prob = LpProblem(
+                f"Dream11_Team_{team_number}",
+                LpMaximize,
+            )
 
-        # Version-safe binary variables.
-        # This works with PuLP 2.x and avoids LpVariable.dicts issues.
-        player_vars = {
-            str(i): LpVariable(f"choice_{i}", cat="Binary")
-            for i in cleaned_df.index
-        }
-
-        # Objective: maximize total credits used.
-        prob += lpSum(
-            cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
-            for i in cleaned_df.index
-        )
-
-        # Exactly 11 players.
-        prob += lpSum(
-            player_vars[str(i)] for i in cleaned_df.index
-        ) == 11
-
-        # Credit limit.
-        prob += lpSum(
-            cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
-            for i in cleaned_df.index
-        ) <= 100.0
-
-        if "🎛️ Sliders Mode" in optimizer_mode:
-            role_targets = {
-                "WK": target_wk,
-                "BAT": target_bat,
-                "AR": target_ar,
-                "BOWL": target_bowl,
+            # Version-safe binary decision variables
+            player_vars = {
+                str(i): LpVariable(f"choice_{i}", cat="Binary")
+                for i in cleaned_df.index
             }
 
-            for role, target in role_targets.items():
+            # Objective: use maximum credits without exceeding 100
+            prob += lpSum(
+                cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
+                for i in cleaned_df.index
+            )
+
+            # Exactly 11 players
+            prob += lpSum(
+                player_vars[str(i)]
+                for i in cleaned_df.index
+            ) == 11
+
+            # Maximum 100 credits
+            prob += lpSum(
+                cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
+                for i in cleaned_df.index
+            ) <= 100.0
+
+            if "🎛️ Sliders Mode" in optimizer_mode:
+
+                role_targets = {
+                    "WK": target_wk,
+                    "BAT": target_bat,
+                    "AR": target_ar,
+                    "BOWL": target_bowl,
+                }
+
+                for role, target in role_targets.items():
+                    prob += lpSum(
+                        player_vars[str(i)]
+                        for i in cleaned_df.index
+                        if cleaned_df.loc[i, "Role"] == role
+                    ) == target
+
+            else:
+
+                for role in ROLES:
+                    role_count = lpSum(
+                        player_vars[str(i)]
+                        for i in cleaned_df.index
+                        if cleaned_df.loc[i, "Role"] == role
+                    )
+
+                    prob += role_count >= 1
+                    prob += role_count <= 8
+
+                for i in cleaned_df.index:
+                    if bool(cleaned_df.loc[i, "Lock_In_All_Teams"]):
+                        prob += player_vars[str(i)] == 1
+
+            # Make each new team different from previous teams.
+            # A new team can share maximum 8 players with any earlier team.
+            for previous_team in previous_teams:
                 prob += lpSum(
                     player_vars[str(i)]
-                    for i in cleaned_df.index
-                    if cleaned_df.loc[i, "Role"] == role
-                ) == target
+                    for i in previous_team
+                ) <= 8
 
-        else:
-            for role in ROLES:
-                role_count = lpSum(
-                    player_vars[str(i)]
-                    for i in cleaned_df.index
-                    if cleaned_df.loc[i, "Role"] == role
-                )
+            status = prob.solve(PULP_CBC_CMD(msg=False))
 
-                prob += role_count >= 1
-                prob += role_count <= 8
+            if LpStatus[status] != "Optimal":
+                if team_number == 1:
+                    st.error(
+                        "No valid combination matches your selected strategy. "
+                        "Check player credits, roles, locks, or slider values."
+                    )
+                else:
+                    st.warning(
+                        f"Could only generate {len(generated_lineups)} "
+                        "unique teams before running out of valid combinations."
+                    )
+                break
 
-            for i in cleaned_df.index:
-                if bool(cleaned_df.loc[i, "Lock_In_All_Teams"]):
-                    prob += player_vars[str(i)] == 1
+            selected_indices = [
+                i
+                for i in cleaned_df.index
+                if player_vars[str(i)].varValue == 1
+            ]
 
-        # Ensure each new team differs from previous teams.
-        # A new team may share at most 8 players with any previous team.
-        for previous_team in previous_teams:
-            prob += lpSum(
-                player_vars[str(i)] for i in previous_team
-            ) <= 8
+            previous_teams.append(selected_indices)
 
-        status = prob.solve(PULP_CBC_CMD(msg=False))
+            team_df = cleaned_df.loc[selected_indices].copy()
+            team_df = team_df.drop(columns=["Lock_In_All_Teams"])
+            team_df = team_df.reset_index(drop=True)
 
-        if LpStatus[status] != "Optimal":
-            if team_number == 1:
-                st.error(
-                    "No valid combination matches your selected strategy. "
-                    "Check player credits, roles, locks, or slider values."
-                )
-            else:
-                st.warning(
-                    f"Could only generate {len(generated_lineups)} "
-                    "unique teams before running out of valid combinations."
-                )
-            break
+            generated_lineups.append((team_number, team_df))
 
-        selected_indices = [
-            i
-            for i in cleaned_df.index
-            if player_vars[str(i)].varValue == 1
-        ]
+    if generated_lineups:
+        st.success(
+            f"Successfully generated {len(generated_lineups)} "
+            "unique team lineups!"
+        )
 
-        previous_teams.append(selected_indices)
+        for team_number, team_df in generated_lineups:
+            credits_used = team_df["Credits"].sum()
 
-        team_df = cleaned_df.loc[selected_indices].copy()
-        team_df = team_df.drop(columns=["Lock_In_All_Teams"])
-        team_df = team_df.reset_index(drop=True)
+            with st.expander(
+                f"📋 TEAM {team_number} "
+                f"(Total Credits Used: {credits_used:.1f} / 100)"
+            ):
+                st.dataframe(team_df, use_container_width=True)
 
-        generated_lineups.append((team_number, team_df))
-
-        progress_bar.progr
+                if len(team_df) >= 2:
+                    st.info(
+                        f"👑 **Captain:** {team_df.loc[0, 'Name']} | "
+                        f"✨ **Vice-Captain:** {team_df.loc[1, 'Name']}"
+                    )
