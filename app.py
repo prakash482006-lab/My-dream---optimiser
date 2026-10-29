@@ -39,7 +39,6 @@ if len(st.session_state.player_data) == 0:
     df = pd.DataFrame(columns=["Name", "Role", "Credits", "Proj_Points", "Team", "Lock_In_All_Teams"])
 else:
     df = pd.DataFrame(st.session_state.player_data)
-    # Ensure column order is clean
     df = df[["Name", "Role", "Credits", "Proj_Points", "Team", "Lock_In_All_Teams"]]
 
 edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
@@ -94,9 +93,9 @@ if st.button("🚀 Generate Teams", type="primary"):
         # Define base Optimization Problem
         prob = LpProblem("Dream11_Multi_Maximizer", LpMaximize)
         
-        # ROCK-SOLID UNIVERSAL SYNTAX: Use LpVariable.matrix to prevent type errors across different library setups
-        player_indices = list(cleaned_df.index)
-        player_vars = LpVariable.matrix("PVar", player_indices, lowBound=0, upBound=1, cat=LpInteger)
+        # FIXED: Core basic variable array initialization structure using absolute positional arguments.
+        # This completely avoids all keyword arguments and class methods that trigger errors.
+        player_vars = [LpVariable(f"pv_{i}", 0, 1, "Integer") for i in cleaned_df.index]
         
         # Objective function (Maximize total points based on input)
         prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[i] for i in cleaned_df.index])
@@ -114,7 +113,7 @@ if st.button("🚀 Generate Teams", type="primary"):
         for t in teams:
             prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Team"] == t]) <= 10
             
-        # NEW CONSTRAINT: Enforce user selection locks for must-have selections
+        # Enforce user selection locks for must-have selections
         for i in cleaned_df.index:
             if cleaned_df.loc[i, "Lock_In_All_Teams"] == True:
                 prob += player_vars[i] == 1
@@ -127,7 +126,7 @@ if st.button("🚀 Generate Teams", type="primary"):
                 selected_indices = [i for i in cleaned_df.index if player_vars[i].varValue == 1]
                 result_df = cleaned_df.loc[selected_indices].copy()
                 
-                # Exclude the technical lock helper column from output layout to clean the presentation
+                # Exclude the technical lock helper column from output layout
                 display_df = result_df.drop(columns=["Lock_In_All_Teams"])
                 display_df = display_df.sort_values(by="Proj_Points", ascending=False).reset_index(drop=True)
                 
