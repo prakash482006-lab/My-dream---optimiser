@@ -38,7 +38,6 @@ else:
     df = pd.DataFrame(st.session_state.player_data)
     df = df[["Name", "Role", "Credits", "Lock_In_All_Teams"]]
 
-# Display instructions based on selected mode
 st.write("Edit names, roles, or credits directly below. The 'Lock' checkbox will only apply if Lock Mode is turned on.")
 edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
@@ -104,46 +103,47 @@ if st.button("🚀 Generate Teams", type="primary"):
         generated_lineups = []
         prob = LpProblem("Dream11_DualMode_Maximizer", LpMaximize)
         
-        # FIXED: Pure core variable map utilizing clean key naming patterns.
-        # This completely resolves internal type and initialization signature mismatches.
-        player_vars = {i: LpVariable(f"player_choice_{i}", cat="Binary") for i in cleaned_df.index}
+        # BULLETPROOF SYNTAX FIX: Use the native LpVariable.dict tool with standard string lists.
+        # This completely resolves internal signature errors across modern Python environments.
+        player_indices_str = [str(i) for i in cleaned_df.index]
+        player_vars = LpVariable.dict("choice", player_indices_str, 0, 1, LpBinary)
             
-        prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[i] for i in cleaned_df.index])
+        prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[str(i)] for i in cleaned_df.index])
         
         # Base rules applied to both modes
-        prob += lpSum([player_vars[i] for i in cleaned_df.index]) == 11
-        prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[i] for i in cleaned_df.index]) <= 100.0
+        prob += lpSum([player_vars[str(i)] for i in cleaned_df.index]) == 11
+        prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[str(i)] for i in cleaned_df.index]) <= 100.0
         
         # Mode 1: Apply strict user value slider structures
         if "🎛️ Sliders Mode" in optimizer_mode:
-            prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "WK"]) == target_wk
-            prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BAT"]) == target_bat
-            prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "AR"]) == target_ar
-            prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BOWL"]) == target_bowl
+            prob += lpSum([player_vars[str(i)] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "WK"]) == target_wk
+            prob += lpSum([player_vars[str(i)] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BAT"]) == target_bat
+            prob += lpSum([player_vars[str(i)] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "AR"]) == target_ar
+            prob += lpSum([player_vars[str(i)] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == "BOWL"]) == target_bowl
         
         # Mode 2: Apply Lock Constraints & standard Dream11 bounds (1 to 8 players per role)
         else:
             for role in ["WK", "BAT", "AR", "BOWL"]:
-                prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == role]) >= 1
-                prob += lpSum([player_vars[i] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == role]) <= 8
+                prob += lpSum([player_vars[str(i)] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == role]) >= 1
+                prob += lpSum([player_vars[str(i)] for i in cleaned_df.index if cleaned_df.loc[i, "Role"] == role]) <= 8
                 
             for i in cleaned_df.index:
                 if cleaned_df.loc[i, "Lock_In_All_Teams"] == True:
-                    prob += player_vars[i] == 1
+                    prob += player_vars[str(i)] == 1
                     
         # Multi-team execution loop
         for t_idx in range(1, num_teams_to_gen + 1):
             status = prob.solve(PULP_CBC_CMD(msg=False))
             
             if LpStatus[status] == "Optimal":
-                selected_indices = [i for i in cleaned_df.index if player_vars[i].varValue == 1]
+                selected_indices = [i for i in cleaned_df.index if player_vars[str(i)].varValue == 1]
                 result_df = cleaned_df.loc[selected_indices].copy()
                 
                 display_df = result_df.drop(columns=["Lock_In_All_Teams"])
                 display_df = display_df.reset_index(drop=True)
                 
                 generated_lineups.append((t_idx, display_df))
-                prob += lpSum([player_vars[i] for i in selected_indices]) <= 9
+                prob += lpSum([player_vars[str(i)] for i in selected_indices]) <= 9
             else:
                 if t_idx == 1:
                     st.error("No valid combination matches your selected strategy mode criteria. Change your setup options or check player credits.")
