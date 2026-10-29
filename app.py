@@ -17,8 +17,8 @@ st.set_page_config(
 st.title("🏏 Dream11 Unique Team & Captain Builder")
 st.write(
     "Add 22 players: 11 from Team A and 11 from Team B. "
-    "Generate the maximum number of unique 11-player combinations, "
-    "then choose Captain and Vice-Captain for every team."
+    "Mark one player as Captain and one as Vice-Captain in the player pool. "
+    "Then generate maximum unique 11-player combinations."
 )
 
 ROLES = ["WK", "BAT", "AR", "BOWL"]
@@ -29,12 +29,6 @@ TEAM_OPTIONS = ["Team A", "Team B"]
 # ----------------------------
 if "player_data" not in st.session_state:
     st.session_state.player_data = []
-
-if "captain_selections" not in st.session_state:
-    st.session_state.captain_selections = {}
-
-if "vice_captain_selections" not in st.session_state:
-    st.session_state.vice_captain_selections = {}
 
 # ----------------------------
 # Add player form
@@ -72,6 +66,8 @@ with st.form("add_player_form", clear_on_submit=True):
                     "Team": p_team,
                     "Credits": float(p_credits),
                     "Lock_In_All_Teams": False,
+                    "Captain": False,
+                    "Vice_Captain": False,
                 }
             )
             st.success(f"Added {p_name.strip()} to the pool!")
@@ -93,6 +89,8 @@ if len(st.session_state.player_data) == 0:
             "Team",
             "Credits",
             "Lock_In_All_Teams",
+            "Captain",
+            "Vice_Captain",
         ]
     )
 else:
@@ -104,6 +102,8 @@ else:
             "Team",
             "Credits",
             "Lock_In_All_Teams",
+            "Captain",
+            "Vice_Captain",
         ]
     ]
 
@@ -112,6 +112,16 @@ edited_df = st.data_editor(
     num_rows="dynamic",
     use_container_width=True,
     key="player_pool_editor",
+    column_config={
+        "Captain": st.column_config.CheckboxColumn(
+            "Captain",
+            help="Tick only one player as Captain.",
+        ),
+        "Vice_Captain": st.column_config.CheckboxColumn(
+            "Vice-Captain",
+            help="Tick only one player as Vice-Captain.",
+        ),
+    },
 )
 
 st.session_state.player_data = edited_df.to_dict("records")
@@ -303,10 +313,6 @@ st.caption(
 # ----------------------------
 if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
 
-    # Clear previous captain selections when generating new teams
-    st.session_state.captain_selections = {}
-    st.session_state.vice_captain_selections = {}
-
     cleaned_df = edited_df.dropna(subset=["Name"]).copy()
     cleaned_df = cleaned_df[
         cleaned_df["Name"].astype(str).str.strip() != ""
@@ -328,7 +334,46 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
         .astype(bool)
     )
 
+    cleaned_df["Captain"] = (
+        cleaned_df["Captain"]
+        .fillna(False)
+        .astype(bool)
+    )
+
+    cleaned_df["Vice_Captain"] = (
+        cleaned_df["Vice_Captain"]
+        .fillna(False)
+        .astype(bool)
+    )
+
     cleaned_df["Team"] = cleaned_df["Team"].fillna("Team A")
+
+    captain_players = cleaned_df[cleaned_df["Captain"] == True]
+    vice_captain_players = cleaned_df[cleaned_df["Vice_Captain"] == True]
+
+    if len(captain_players) > 1:
+        st.error(
+            "You have selected more than one Captain. "
+            "Please tick the Captain checkbox for only one player."
+        )
+        st.stop()
+
+    if len(vice_captain_players) > 1:
+        st.error(
+            "You have selected more than one Vice-Captain. "
+            "Please tick the Vice-Captain checkbox for only one player."
+        )
+        st.stop()
+
+    if len(captain_players) == 1 and len(vice_captain_players) == 1:
+        if (
+            captain_players.iloc[0]["Name"]
+            == vice_captain_players.iloc[0]["Name"]
+        ):
+            st.error(
+                "The same player cannot be both Captain and Vice-Captain."
+            )
+            st.stop()
 
     total_locked = int(cleaned_df["Lock_In_All_Teams"].sum())
 
@@ -388,7 +433,7 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
                 for i in cleaned_df.index
             }
 
-            # Objective: maximize credits used while remaining under 100
+            # Objective: maximize credits used while staying within 100
             prob += lpSum(
                 cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
                 for i in cleaned_df.index
@@ -462,7 +507,7 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
                     if bool(cleaned_df.loc[i, "Lock_In_All_Teams"]):
                         prob += player_vars[str(i)] == 1
 
-            # Force uniqueness against every previously generated team
+            # Force uniqueness against previous teams
             for previous_team in previous_teams:
                 prob += lpSum(
                     player_vars[str(i)]
@@ -495,7 +540,9 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
             previous_teams.append(selected_indices)
 
             team_df = cleaned_df.loc[selected_indices].copy()
-            team_df = team_df.drop(columns=["Lock_In_All_Teams"])
+            team_df = team_df.drop(
+                columns=["Lock_In_All_Teams", "Captain", "Vice_Captain"]
+            )
             team_df = team_df.reset_index(drop=True)
 
             generated_lineups.append((team_number, team_df))
@@ -503,7 +550,19 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
     if generated_lineups:
         st.success(
             f"Successfully generated **{len(generated_lineups)} unique "
-            "team lineups!** Now choose Captain and Vice-Captain below."
+            "team lineups!**"
+        )
+
+        selected_captain = (
+            captain_players.iloc[0]["Name"]
+            if len(captain_players) == 1
+            else None
+        )
+
+        selected_vice_captain = (
+            vice_captain_players.iloc[0]["Name"]
+            if len(vice_captain_players) == 1
+            else None
         )
 
         for team_number, team_df in generated_lineups:
@@ -520,31 +579,37 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
             ):
                 st.dataframe(team_df, use_container_width=True)
 
-                captain_key = f"captain_team_{team_number}"
-                vice_captain_key = f"vice_captain_team_{team_number}"
-
-                col_cap, col_vice = st.columns(2)
-
-                with col_cap:
-                    captain = st.selectbox(
-                        "👑 Choose Captain",
-                        player_names,
-                        key=captain_key,
+                # Pre-select pool Captain if present in this team
+                if selected_captain in player_names:
+                    captain_default_index = player_names.index(
+                        selected_captain
                     )
+                else:
+                    captain_default_index = 0
 
-                with col_vice:
-                    default_index = 0
-                    if captain in player_names:
-                        default_index = (
-                            player_names.index(captain) + 1
-                        ) % len(player_names)
+                captain = st.selectbox(
+                    f"👑 Captain for Team {team_number}",
+                    player_names,
+                    index=captain_default_index,
+                    key=f"captain_team_{team_number}",
+                )
 
-                    vice_captain = st.selectbox(
-                        "✨ Choose Vice-Captain",
-                        player_names,
-                        index=default_index,
-                        key=vice_captain_key,
+                # Pre-select pool Vice-Captain if present in this team
+                if selected_vice_captain in player_names:
+                    vice_default_index = player_names.index(
+                        selected_vice_captain
                     )
+                else:
+                    vice_default_index = (
+                        player_names.index(captain) + 1
+                    ) % len(player_names)
+
+                vice_captain = st.selectbox(
+                    f"✨ Vice-Captain for Team {team_number}",
+                    player_names,
+                    index=vice_default_index,
+                    key=f"vice_captain_team_{team_number}",
+                )
 
                 if captain == vice_captain:
                     st.error(
@@ -554,9 +619,4 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
                     st.success(
                         f"👑 **Captain:** {captain} | "
                         f"✨ **Vice-Captain:** {vice_captain}"
-                    )
-
-                    st.session_state.captain_selections[team_number] = captain
-                    st.session_state.vice_captain_selections[team_number] = (
-                        vice_captain
                     )
