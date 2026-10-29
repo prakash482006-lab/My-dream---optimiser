@@ -45,7 +45,7 @@ edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 if not edited_df.equals(df):
     st.session_state.player_data = edited_df.to_dict('records')
 
-# NEW FEATURE: EITHER / OR MODE TOGGLE SWITCH
+# Strategy Mode Selector
 st.subheader("🛠️ Choose Strategy Mode")
 optimizer_mode = st.radio(
     "Select which strategy rule to enforce for this generation:",
@@ -104,13 +104,9 @@ if st.button("🚀 Generate Teams", type="primary"):
         generated_lineups = []
         prob = LpProblem("Dream11_DualMode_Maximizer", LpMaximize)
         
-        player_vars = []
-        for i in cleaned_df.index:
-            v = LpVariable(f"pv_{i}")
-            v.lowBound = 0
-            v.upBound = 1
-            v.cat = "Binary"
-            player_vars.append(v)
+        # FIXED: Pure core variable map utilizing clean key naming patterns.
+        # This completely resolves internal type and initialization signature mismatches.
+        player_vars = {i: LpVariable(f"player_choice_{i}", cat="Binary") for i in cleaned_df.index}
             
         prob += lpSum([cleaned_df.loc[i, "Credits"] * player_vars[i] for i in cleaned_df.index])
         
