@@ -297,29 +297,11 @@ else:
     )
 
 # ----------------------------
-# Uniqueness setting
+# Unique team setting
 # ----------------------------
-st.subheader("🔁 Unique Team Strength")
-
-max_overlap = st.selectbox(
-    "Maximum players allowed to repeat from any previous team:",
-    [
-        "Allow up to 8 same players",
-        "Allow up to 7 same players",
-        "Allow up to 6 same players",
-        "Allow up to 5 same players",
-    ],
-    index=0,
-)
-
-overlap_map = {
-    "Allow up to 8 same players": 8,
-    "Allow up to 7 same players": 7,
-    "Allow up to 6 same players": 6,
-    "Allow up to 5 same players": 5,
-}
-
-max_allowed_overlap = overlap_map[max_overlap]
+# This setting is fixed to generate the maximum number of teams.
+# A new team can share maximum 8 players with any previous team.
+max_allowed_overlap = 8
 
 # ----------------------------
 # Generation settings
@@ -332,6 +314,11 @@ num_teams_to_gen = st.number_input(
     max_value=40,
     value=20,
     step=1,
+)
+
+st.caption(
+    "The app will keep generating until it reaches this limit or no more "
+    "valid unique combinations are possible."
 )
 
 # ----------------------------
@@ -498,8 +485,7 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
             ) <= 100.0
 
             # ----------------------------
-            # IMPORTANT FIX:
-            # Apply locked players in EVERY mode
+            # Locked players: forced into every team
             # ----------------------------
             for i in cleaned_df.index:
                 if bool(cleaned_df.loc[i, "Lock_In_All_Teams"]):
@@ -571,7 +557,7 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
                     st.error(
                         "No valid combination matches your selected strategy. "
                         "Check locked players, credits, teams, roles, split, "
-                        "or uniqueness setting."
+                        "or generation settings."
                     )
                 else:
                     st.warning(
