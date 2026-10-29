@@ -10,15 +10,15 @@ from pulp import (
 )
 
 st.set_page_config(
-    page_title="Dream11 Dual-Team Combination Optimizer",
+    page_title="Dream11 Unique Team & Captain Builder",
     layout="centered",
 )
 
-st.title("🏏 Dream11 Two-Team Combination Builder")
+st.title("🏏 Dream11 Unique Team & Captain Builder")
 st.write(
     "Add 22 players: 11 from Team A and 11 from Team B. "
-    "Then generate 11-player combinations using a chosen split, "
-    "such as 6 from Team A + 5 from Team B."
+    "Generate the maximum number of unique 11-player combinations, "
+    "then choose Captain and Vice-Captain for every team."
 )
 
 ROLES = ["WK", "BAT", "AR", "BOWL"]
@@ -29,6 +29,12 @@ TEAM_OPTIONS = ["Team A", "Team B"]
 # ----------------------------
 if "player_data" not in st.session_state:
     st.session_state.player_data = []
+
+if "captain_selections" not in st.session_state:
+    st.session_state.captain_selections = {}
+
+if "vice_captain_selections" not in st.session_state:
+    st.session_state.vice_captain_selections = {}
 
 # ----------------------------
 # Add player form
@@ -137,8 +143,8 @@ if "🔀 Two-Team Combination Mode" in optimizer_mode:
 
     st.info(
         "💡 **Active Strategy:** Choose how many players to take from "
-        "Team A and Team B. The optimizer will always create 11-player "
-        "teams within 100 credits."
+        "Team A and Team B. Every generated team will contain exactly "
+        "11 players within 100 credits."
     )
 
     split_option = st.selectbox(
@@ -229,22 +235,77 @@ else:
     )
 
 # ----------------------------
+# Uniqueness setting
+# ----------------------------
+st.subheader("🔁 Unique Team Strength")
+
+max_overlap = st.selectbox(
+    "Maximum players allowed to repeat from any previous team:",
+    [
+        "Allow up to 8 same players",
+        "Allow up to 7 same players",
+        "Allow up to 6 same players",
+        "Allow up to 5 same players",
+    ],
+    index=0,
+)
+
+overlap_map = {
+    "Allow up to 8 same players": 8,
+    "Allow up to 7 same players": 7,
+    "Allow up to 6 same players": 6,
+    "Allow up to 5 same players": 5,
+}
+
+max_allowed_overlap = overlap_map[max_overlap]
+
+if max_allowed_overlap == 8:
+    st.info(
+        "This creates the maximum number of teams, but teams may be "
+        "similar. Each new team will differ by at least 3 players."
+    )
+elif max_allowed_overlap == 7:
+    st.info(
+        "Each new team will differ by at least 4 players from every "
+        "previous team."
+    )
+elif max_allowed_overlap == 6:
+    st.info(
+        "Each new team will differ by at least 5 players from every "
+        "previous team."
+    )
+else:
+    st.info(
+        "This creates the most different teams, but fewer teams may be "
+        "possible. Each new team will differ by at least 6 players."
+    )
+
+# ----------------------------
 # Generation settings
 # ----------------------------
 st.subheader("🤖 Generation Settings")
 
 num_teams_to_gen = st.number_input(
-    "How many unique teams do you want to generate?",
+    "Maximum number of unique teams to generate:",
     min_value=1,
     max_value=40,
-    value=10,
+    value=20,
     step=1,
+)
+
+st.caption(
+    "The app will keep generating until it reaches this limit or no more "
+    "valid unique combinations are possible."
 )
 
 # ----------------------------
 # Generate teams
 # ----------------------------
-if st.button("🚀 Generate Teams", type="primary"):
+if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
+
+    # Clear previous captain selections when generating new teams
+    st.session_state.captain_selections = {}
+    st.session_state.vice_captain_selections = {}
 
     cleaned_df = edited_df.dropna(subset=["Name"]).copy()
     cleaned_df = cleaned_df[
@@ -313,12 +374,12 @@ if st.button("🚀 Generate Teams", type="primary"):
     generated_lineups = []
     previous_teams = []
 
-    with st.spinner("Generating unique teams..."):
+    with st.spinner("Generating maximum unique teams..."):
 
         for team_number in range(1, num_teams_to_gen + 1):
 
             prob = LpProblem(
-                f"Dream11_Team_{team_number}",
+                f"Dream11_Unique_Team_{team_number}",
                 LpMaximize,
             )
 
@@ -327,13 +388,13 @@ if st.button("🚀 Generate Teams", type="primary"):
                 for i in cleaned_df.index
             }
 
-            # Objective: maximize credits used, while staying within 100
+            # Objective: maximize credits used while remaining under 100
             prob += lpSum(
                 cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
                 for i in cleaned_df.index
             )
 
-            # Exactly 11 players in every generated team
+            # Exactly 11 players
             prob += lpSum(
                 player_vars[str(i)]
                 for i in cleaned_df.index
@@ -359,7 +420,6 @@ if st.button("🚀 Generate Teams", type="primary"):
                     if cleaned_df.loc[i, "Team"] == "Team B"
                 ) == team_b_count
 
-                # Keep normal Dream11 role balance
                 for role in ROLES:
                     role_count = lpSum(
                         player_vars[str(i)]
@@ -402,12 +462,12 @@ if st.button("🚀 Generate Teams", type="primary"):
                     if bool(cleaned_df.loc[i, "Lock_In_All_Teams"]):
                         prob += player_vars[str(i)] == 1
 
-            # Ensure each new team differs from previous teams
+            # Force uniqueness against every previously generated team
             for previous_team in previous_teams:
                 prob += lpSum(
                     player_vars[str(i)]
                     for i in previous_team
-                ) <= 8
+                ) <= max_allowed_overlap
 
             status = prob.solve(PULP_CBC_CMD(msg=False))
 
@@ -415,12 +475,14 @@ if st.button("🚀 Generate Teams", type="primary"):
                 if team_number == 1:
                     st.error(
                         "No valid combination matches your selected strategy. "
-                        "Check player credits, roles, teams, locks, or split."
+                        "Check credits, roles, teams, locks, split, or "
+                        "uniqueness setting."
                     )
                 else:
                     st.warning(
-                        f"Could only generate {len(generated_lineups)} "
-                        "unique teams before running out of valid combinations."
+                        f"Generated the maximum possible number of unique "
+                        f"teams for your settings: "
+                        f"**{len(generated_lineups)} teams**."
                     )
                 break
 
@@ -440,12 +502,13 @@ if st.button("🚀 Generate Teams", type="primary"):
 
     if generated_lineups:
         st.success(
-            f"Successfully generated {len(generated_lineups)} "
-            "unique team lineups!"
+            f"Successfully generated **{len(generated_lineups)} unique "
+            "team lineups!** Now choose Captain and Vice-Captain below."
         )
 
         for team_number, team_df in generated_lineups:
             credits_used = team_df["Credits"].sum()
+            player_names = team_df["Name"].tolist()
 
             team_a_selected = int((team_df["Team"] == "Team A").sum())
             team_b_selected = int((team_df["Team"] == "Team B").sum())
@@ -457,8 +520,43 @@ if st.button("🚀 Generate Teams", type="primary"):
             ):
                 st.dataframe(team_df, use_container_width=True)
 
-                if len(team_df) >= 2:
-                    st.info(
-                        f"👑 **Captain:** {team_df.loc[0, 'Name']} | "
-                        f"✨ **Vice-Captain:** {team_df.loc[1, 'Name']}"
+                captain_key = f"captain_team_{team_number}"
+                vice_captain_key = f"vice_captain_team_{team_number}"
+
+                col_cap, col_vice = st.columns(2)
+
+                with col_cap:
+                    captain = st.selectbox(
+                        "👑 Choose Captain",
+                        player_names,
+                        key=captain_key,
+                    )
+
+                with col_vice:
+                    default_index = 0
+                    if captain in player_names:
+                        default_index = (
+                            player_names.index(captain) + 1
+                        ) % len(player_names)
+
+                    vice_captain = st.selectbox(
+                        "✨ Choose Vice-Captain",
+                        player_names,
+                        index=default_index,
+                        key=vice_captain_key,
+                    )
+
+                if captain == vice_captain:
+                    st.error(
+                        "Captain and Vice-Captain cannot be the same player."
+                    )
+                else:
+                    st.success(
+                        f"👑 **Captain:** {captain} | "
+                        f"✨ **Vice-Captain:** {vice_captain}"
+                    )
+
+                    st.session_state.captain_selections[team_number] = captain
+                    st.session_state.vice_captain_selections[team_number] = (
+                        vice_captain
                     )
