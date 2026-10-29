@@ -93,9 +93,14 @@ if st.button("🚀 Generate Teams", type="primary"):
         # Define base Optimization Problem
         prob = LpProblem("Dream11_Multi_Maximizer", LpMaximize)
         
-        # FIXED: Core basic variable array initialization structure using absolute positional arguments.
-        # This completely avoids all keyword arguments and class methods that trigger errors.
-        player_vars = [LpVariable(f"pv_{i}", 0, 1, "Integer") for i in cleaned_df.index]
+        # FIXED: Initialize variables cleanly one by one to avoid all library version conflicts
+        player_vars = []
+        for i in cleaned_df.index:
+            v = LpVariable(f"pv_{i}")
+            v.lowBound = 0
+            v.upBound = 1
+            v.cat = "Binary"
+            player_vars.append(v)
         
         # Objective function (Maximize total points based on input)
         prob += lpSum([cleaned_df.loc[i, "Proj_Points"] * player_vars[i] for i in cleaned_df.index])
