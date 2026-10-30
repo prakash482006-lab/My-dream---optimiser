@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+import io
 from pulp import (
     LpProblem,
     LpMaximize,
@@ -11,14 +12,15 @@ from pulp import (
 )
 
 st.set_page_config(
-    page_title="Dream11 Unique Team & Captain Builder",
+    page_title="Dream11 Unique Team Builder",
     layout="centered",
 )
 
-st.title("🏏 Dream11 Unique Team & Captain Builder")
+st.title("🏏 Dream11 Unique Team Builder")
 st.write(
-    "Add 22 players: 11 from Team A and 11 from Team B. "
-    "Locked players will be forced into every generated team."
+    "Generate up to 100 unique teams per click. Download one Excel file "
+    "containing all generated teams. New teams will never duplicate "
+    "previous teams."
 )
 
 ROLES = ["WK", "BAT", "AR", "BOWL"]
@@ -32,6 +34,12 @@ if "player_data" not in st.session_state:
 
 if "pool_version" not in st.session_state:
     st.session_state.pool_version = 0
+
+if "all_previous_teams" not in st.session_state:
+    st.session_state.all_previous_teams = []
+
+if "generated_lineups" not in st.session_state:
+    st.session_state.generated_lineups = []
 
 # ----------------------------
 # Add player form
@@ -115,8 +123,6 @@ else:
 
     player_df = player_df[required_columns]
 
-# Important: this key changes after loading a saved pool,
-# so Streamlit displays the newly loaded players correctly.
 player_editor_key = f"player_pool_editor_{st.session_state.pool_version}"
 
 edited_df = st.data_editor(
@@ -179,8 +185,6 @@ with load_col:
 
             if isinstance(loaded_data, list) and len(loaded_data) > 0:
                 st.session_state.player_data = loaded_data
-
-                # Change editor key so the loaded players appear properly
                 st.session_state.pool_version += 1
 
                 st.success(
@@ -256,9 +260,8 @@ if "🔀 Two-Team Combination Mode" in optimizer_mode:
 
 elif "🔒 Lock Mode" in optimizer_mode:
     st.info(
-        "💡 **Active Strategy:** The engine will force your selected "
-        "'Lock' players into all lineups and automatically balance the "
-        "remaining slots using Dream11 standard rules."
+        "💡 **Active Strategy:** Locked players will be forced into all "
+        "lineups and the remaining slots will be balanced automatically."
     )
 
 else:
@@ -313,33 +316,37 @@ else:
     )
 
 # ----------------------------
-# Unique team setting
-# ----------------------------
-# Fixed setting to generate maximum possible teams.
-max_allowed_overlap = 8
-
-# ----------------------------
 # Generation settings
 # ----------------------------
 st.subheader("🤖 Generation Settings")
 
-num_teams_to_gen = st.number_input(
-    "Maximum number of unique teams to generate:",
+teams_per_click = st.number_input(
+    "How many unique teams do you want to generate per click?",
     min_value=1,
     max_value=100,
-    value=20,
+    value=100,
     step=1,
 )
 
-st.caption(
-    "The app will keep generating until it reaches this limit or no more "
-    "valid unique combinations are possible."
+st.info(
+    f"Total unique teams generated so far: "
+    f"**{len(st.session_state.generated_lineups)}**. "
+    "Every new click will avoid all previous teams."
 )
+
+if st.button("🗑️ Clear All Generated Teams"):
+    st.session_state.all_previous_teams = []
+    st.session_state.generated_lineups = []
+    st.success("All generated teams cleared.")
+    st.rerun()
 
 # ----------------------------
 # Generate teams
 # ----------------------------
-if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
+if st.button(
+    f"🚀 Generate Next {teams_per_click} Unique Teams",
+    type="primary",
+):
 
     cleaned_df = edited_df.dropna(subset=["Name"]).copy()
     cleaned_df = cleaned_df[
@@ -464,12 +471,19 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
         st.error("Captain and Vice-Captain cannot be the same player.")
         st.stop()
 
-    generated_lineups = []
-    previous_teams = []
+    previous_teams = st.session_state.all_previous_teams.copy()
+    new_lineups = []
 
-    with st.spinner("Generating maximum unique teams..."):
+    start_team_number = len(previous_teams) + 1
+    end_team_number = start_team_number + teams_per_click - 1
 
-        for team_number in range(1, num_teams_to_gen + 1):
+    with st.spinner(
+        f"Generating teams {start_team_number} to {end_team_number}..."
+    ):
+
+        for batch_number in range(1, teams_per_click + 1):
+
+            team_number = start_team_number + batch_number - 1
 
             prob = LpProblem(
                 f"Dream11_Unique_Team_{team_number}",
@@ -556,27 +570,26 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
                     prob += role_count >= 1
                     prob += role_count <= 8
 
-            # Force uniqueness against previous teams
+            # Prevent duplicate or near-duplicate teams from
+            # ALL previous generations
             for previous_team in previous_teams:
                 prob += lpSum(
                     player_vars[str(i)]
                     for i in previous_team
-                ) <= max_allowed_overlap
+                ) <= 8
 
             status = prob.solve(PULP_CBC_CMD(msg=False))
 
             if LpStatus[status] != "Optimal":
-                if team_number == 1:
-                    st.error(
-                        "No valid combination matches your selected strategy. "
-                        "Check locked players, credits, teams, roles, split, "
-                        "or generation settings."
+                if batch_number == 1:
+                    st.warning(
+                        "No more valid unique teams can be generated "
+                        "with your current settings."
                     )
                 else:
                     st.warning(
-                        f"Generated the maximum possible number of unique "
-                        f"teams for your settings: "
-                        f"**{len(generated_lineups)} teams**."
+                        f"Generated {len(new_lineups)} new unique teams. "
+                        "No further valid unique team is possible."
                     )
                 break
 
@@ -594,76 +607,179 @@ if st.button("🚀 Generate Maximum Unique Teams", type="primary"):
             )
             team_df = team_df.reset_index(drop=True)
 
-            generated_lineups.append((team_number, team_df))
+            new_lineups.append((team_number, team_df))
 
-    if generated_lineups:
+    # Save all generated teams
+    st.session_state.all_previous_teams = previous_teams
+    st.session_state.generated_lineups.extend(new_lineups)
+
+    if new_lineups:
         st.success(
-            f"Successfully generated **{len(generated_lineups)} unique "
-            "team lineups!**"
+            f"Successfully generated **{len(new_lineups)} new unique "
+            f"teams**. Total teams now: "
+            f"**{len(st.session_state.generated_lineups)}**."
+        )
+    else:
+        st.warning("No new unique teams could be generated.")
+
+# ----------------------------
+# Download Excel: all generated teams
+# ----------------------------
+if st.session_state.generated_lineups:
+
+    st.subheader("📥 Download All Generated Teams")
+
+    excel_buffer = io.BytesIO()
+
+    with pd.ExcelWriter(
+        excel_buffer,
+        engine="openpyxl",
+    ) as writer:
+
+        all_teams_rows = []
+
+        for team_number, team_df in st.session_state.generated_lineups:
+
+            export_df = team_df.copy()
+            export_df.insert(0, "Team Number", team_number)
+
+            captain = st.session_state.get(
+                f"captain_team_{team_number}",
+                "",
+            )
+
+            vice_captain = st.session_state.get(
+                f"vice_captain_team_{team_number}",
+                "",
+            )
+
+            export_df["Captain"] = captain
+            export_df["Vice-Captain"] = vice_captain
+
+            all_teams_rows.append(export_df)
+
+            # Separate sheet for each team
+            sheet_name = f"Team {team_number}"[:31]
+
+            export_df.to_excel(
+                writer,
+                sheet_name=sheet_name,
+                index=False,
+            )
+
+        # One combined sheet with every generated team
+        all_teams_df = pd.concat(
+            all_teams_rows,
+            ignore_index=True,
         )
 
-        selected_captain = (
-            captain_players.iloc[0]["Name"]
-            if len(captain_players) == 1
-            else None
+        all_teams_df.to_excel(
+            writer,
+            sheet_name="All Teams",
+            index=False,
         )
 
-        selected_vice_captain = (
-            vice_captain_players.iloc[0]["Name"]
-            if len(vice_captain_players) == 1
-            else None
-        )
+    excel_buffer.seek(0)
 
-        for team_number, team_df in generated_lineups:
-            credits_used = team_df["Credits"].sum()
-            player_names = team_df["Name"].tolist()
+    total_teams = len(st.session_state.generated_lineups)
 
-            team_a_selected = int((team_df["Team"] == "Team A").sum())
-            team_b_selected = int((team_df["Team"] == "Team B").sum())
+    st.download_button(
+        label=(
+            f"📥 Download All {total_teams} Generated Teams as Excel"
+        ),
+        data=excel_buffer.getvalue(),
+        file_name=(
+            f"dream11_all_{total_teams}_teams.xlsx"
+        ),
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        key="download_all_generated_teams_excel",
+    )
 
-            with st.expander(
-                f"📋 TEAM {team_number} | "
-                f"Team A: {team_a_selected} | Team B: {team_b_selected} | "
-                f"Credits: {credits_used:.1f} / 100"
-            ):
-                st.dataframe(team_df, use_container_width=True)
+# ----------------------------
+# Show all generated teams
+# ----------------------------
+if st.session_state.generated_lineups:
 
-                if selected_captain in player_names:
-                    captain_default_index = player_names.index(
-                        selected_captain
-                    )
-                else:
-                    captain_default_index = 0
+    st.subheader(
+        f"📋 All Generated Teams "
+        f"({len(st.session_state.generated_lineups)} total)"
+    )
 
-                captain = st.selectbox(
-                    f"👑 Captain for Team {team_number}",
-                    player_names,
-                    index=captain_default_index,
-                    key=f"captain_team_{team_number}",
+    selected_captain = None
+    selected_vice_captain = None
+
+    if len(st.session_state.player_data) > 0:
+        player_check_df = pd.DataFrame(st.session_state.player_data)
+
+        if "Captain" in player_check_df.columns:
+            captain_rows = player_check_df[
+                player_check_df["Captain"] == True
+            ]
+
+            if len(captain_rows) == 1:
+                selected_captain = captain_rows.iloc[0]["Name"]
+
+        if "Vice_Captain" in player_check_df.columns:
+            vice_rows = player_check_df[
+                player_check_df["Vice_Captain"] == True
+            ]
+
+            if len(vice_rows) == 1:
+                selected_vice_captain = vice_rows.iloc[0]["Name"]
+
+    for team_number, team_df in st.session_state.generated_lineups:
+        credits_used = team_df["Credits"].sum()
+        player_names = team_df["Name"].tolist()
+
+        team_a_selected = int((team_df["Team"] == "Team A").sum())
+        team_b_selected = int((team_df["Team"] == "Team B").sum())
+
+        with st.expander(
+            f"📋 TEAM {team_number} | "
+            f"Team A: {team_a_selected} | Team B: {team_b_selected} | "
+            f"Credits: {credits_used:.1f} / 100"
+        ):
+            st.dataframe(team_df, use_container_width=True)
+
+            if selected_captain in player_names:
+                captain_default_index = player_names.index(
+                    selected_captain
                 )
+            else:
+                captain_default_index = 0
 
-                if selected_vice_captain in player_names:
-                    vice_default_index = player_names.index(
-                        selected_vice_captain
-                    )
-                else:
-                    vice_default_index = (
-                        player_names.index(captain) + 1
-                    ) % len(player_names)
+            captain = st.selectbox(
+                f"👑 Captain for Team {team_number}",
+                player_names,
+                index=captain_default_index,
+                key=f"captain_team_{team_number}",
+            )
 
-                vice_captain = st.selectbox(
-                    f"✨ Vice-Captain for Team {team_number}",
-                    player_names,
-                    index=vice_default_index,
-                    key=f"vice_captain_team_{team_number}",
+            if selected_vice_captain in player_names:
+                vice_default_index = player_names.index(
+                    selected_vice_captain
                 )
+            else:
+                vice_default_index = (
+                    player_names.index(captain) + 1
+                ) % len(player_names)
 
-                if captain == vice_captain:
-                    st.error(
-                        "Captain and Vice-Captain cannot be the same player."
-                    )
-                else:
-                    st.success(
-                        f"👑 **Captain:** {captain} | "
-                        f"✨ **Vice-Captain:** {vice_captain}"
-                    )
+            vice_captain = st.selectbox(
+                f"✨ Vice-Captain for Team {team_number}",
+                player_names,
+                index=vice_default_index,
+                key=f"vice_captain_team_{team_number}",
+            )
+
+            if captain == vice_captain:
+                st.error(
+                    "Captain and Vice-Captain cannot be the same player."
+                )
+            else:
+                st.success(
+                    f"👑 **Captain:** {captain} | "
+                    f"✨ **Vice-Captain:** {vice_captain}"
+                )
