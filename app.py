@@ -316,6 +316,13 @@ else:
     )
 
 # ----------------------------
+# Unique team setting
+# ----------------------------
+# Fixed to create maximum possible teams.
+# A new team can share maximum 8 players with any previous team.
+max_allowed_overlap = 8
+
+# ----------------------------
 # Generation settings
 # ----------------------------
 st.subheader("🤖 Generation Settings")
@@ -576,7 +583,7 @@ if st.button(
                 prob += lpSum(
                     player_vars[str(i)]
                     for i in previous_team
-                ) <= 8
+                ) <= max_allowed_overlap
 
             status = prob.solve(PULP_CBC_CMD(msg=False))
 
@@ -623,11 +630,41 @@ if st.button(
         st.warning("No new unique teams could be generated.")
 
 # ----------------------------
-# Download Excel: all generated teams
+# Download Excel: All Teams summary format
 # ----------------------------
 if st.session_state.generated_lineups:
 
     st.subheader("📥 Download All Generated Teams")
+
+    all_teams_summary = []
+
+    for team_number, team_df in st.session_state.generated_lineups:
+
+        wk_players = team_df[team_df["Role"] == "WK"]["Name"].tolist()
+        bat_players = team_df[team_df["Role"] == "BAT"]["Name"].tolist()
+        ar_players = team_df[team_df["Role"] == "AR"]["Name"].tolist()
+        bowl_players = team_df[team_df["Role"] == "BOWL"]["Name"].tolist()
+
+        all_teams_summary.append(
+            {
+                "Team Number": team_number,
+                "WK": ", ".join(wk_players),
+                "BAT": ", ".join(bat_players),
+                "AR": ", ".join(ar_players),
+                "BOWL": ", ".join(bowl_players),
+            }
+        )
+
+    all_teams_excel_df = pd.DataFrame(
+        all_teams_summary,
+        columns=[
+            "Team Number",
+            "WK",
+            "BAT",
+            "AR",
+            "BOWL",
+        ],
+    )
 
     excel_buffer = io.BytesIO()
 
@@ -636,44 +673,7 @@ if st.session_state.generated_lineups:
         engine="openpyxl",
     ) as writer:
 
-        all_teams_rows = []
-
-        for team_number, team_df in st.session_state.generated_lineups:
-
-            export_df = team_df.copy()
-            export_df.insert(0, "Team Number", team_number)
-
-            captain = st.session_state.get(
-                f"captain_team_{team_number}",
-                "",
-            )
-
-            vice_captain = st.session_state.get(
-                f"vice_captain_team_{team_number}",
-                "",
-            )
-
-            export_df["Captain"] = captain
-            export_df["Vice-Captain"] = vice_captain
-
-            all_teams_rows.append(export_df)
-
-            # Separate sheet for each team
-            sheet_name = f"Team {team_number}"[:31]
-
-            export_df.to_excel(
-                writer,
-                sheet_name=sheet_name,
-                index=False,
-            )
-
-        # One combined sheet with every generated team
-        all_teams_df = pd.concat(
-            all_teams_rows,
-            ignore_index=True,
-        )
-
-        all_teams_df.to_excel(
+        all_teams_excel_df.to_excel(
             writer,
             sheet_name="All Teams",
             index=False,
