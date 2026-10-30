@@ -35,6 +35,9 @@ if "player_data" not in st.session_state:
 if "pool_version" not in st.session_state:
     st.session_state.pool_version = 0
 
+if "last_loaded_pool_file" not in st.session_state:
+    st.session_state.last_loaded_pool_file = None
+
 if "all_previous_teams" not in st.session_state:
     st.session_state.all_previous_teams = []
 
@@ -180,22 +183,33 @@ with load_col:
     )
 
     if uploaded_pool is not None:
-        try:
-            loaded_data = json.load(uploaded_pool)
 
-            if isinstance(loaded_data, list) and len(loaded_data) > 0:
-                st.session_state.player_data = loaded_data
-                st.session_state.pool_version += 1
+        current_file_id = f"{uploaded_pool.name}_{uploaded_pool.size}"
 
-                st.success(
-                    f"Loaded {len(loaded_data)} players successfully!"
+        if st.session_state.last_loaded_pool_file != current_file_id:
+
+            try:
+                uploaded_pool.seek(0)
+                loaded_data = json.load(uploaded_pool)
+
+                if isinstance(loaded_data, list) and len(loaded_data) > 0:
+
+                    st.session_state.player_data = loaded_data
+                    st.session_state.pool_version += 1
+                    st.session_state.last_loaded_pool_file = current_file_id
+
+                    st.success(
+                        f"Loaded {len(loaded_data)} players successfully!"
+                    )
+                    st.rerun()
+
+                else:
+                    st.error("Invalid player pool file.")
+
+            except Exception:
+                st.error(
+                    "Could not read the file. Upload a valid JSON file."
                 )
-                st.rerun()
-            else:
-                st.error("Invalid player pool file.")
-
-        except Exception:
-            st.error("Could not read the file. Upload a valid JSON file.")
 
 # ----------------------------
 # Strategy mode
