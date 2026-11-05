@@ -2,25 +2,17 @@ import streamlit as st
 import pandas as pd
 import json
 import io
-from pulp import (
-    LpProblem,
-    LpMaximize,
-    LpVariable,
-    lpSum,
-    PULP_CBC_CMD,
-    LpStatus,
-)
+from itertools import combinations
 
 st.set_page_config(
-    page_title="Dream11 Unique Team Builder",
+    page_title="Dream11 All Possible Teams Builder",
     layout="centered",
 )
 
-st.title("🏏 Dream11 Unique Team Builder")
+st.title("🏏 Dream11 All Possible Teams Builder")
 st.write(
-    "Generate up to 100 unique teams per click. Download one Excel file "
-    "containing all generated teams. New teams will never duplicate "
-    "previous teams."
+    "Generate all valid unique teams from your player pool. "
+    "Download one Excel file containing all generated teams."
 )
 
 ROLES = ["WK", "BAT", "AR", "BOWL"]
@@ -332,20 +324,34 @@ else:
 # ----------------------------
 # Unique team setting
 # ----------------------------
-# Fixed to create maximum possible teams.
-# A new team can share maximum 8 players with any previous team.
-max_allowed_overlap = 8
+st.subheader("🔁 Unique Team Rule")
+
+max_allowed_overlap = st.slider(
+    "Maximum players allowed to repeat from any previous team:",
+    min_value=0,
+    max_value=10,
+    value=8,
+    help=(
+        "8 means a new team can share up to 8 players with an old team. "
+        "Use a lower number for more different teams."
+    ),
+)
+
+st.info(
+    "A new team will be rejected if it shares more than "
+    f"**{max_allowed_overlap} players** with any already-generated team."
+)
 
 # ----------------------------
 # Generation settings
 # ----------------------------
 st.subheader("🤖 Generation Settings")
 
-teams_per_click = st.number_input(
-    "How many unique teams do you want to generate per click?",
+max_teams_to_generate = st.number_input(
+    "Maximum number of teams to generate in this click:",
     min_value=1,
-    max_value=100,
-    value=100,
+    max_value=10000,
+    value=1000,
     step=1,
 )
 
@@ -362,10 +368,10 @@ if st.button("🗑️ Clear All Generated Teams"):
     st.rerun()
 
 # ----------------------------
-# Generate teams
+# Generate all possible teams
 # ----------------------------
 if st.button(
-    f"🚀 Generate Next {teams_per_click} Unique Teams",
+    "🚀 Generate All Possible Unique Teams",
     type="primary",
 ):
 
@@ -377,6 +383,18 @@ if st.button(
 
     if len(cleaned_df) < 11:
         st.error("You need at least 11 valid players to generate a squad.")
+        st.stop()
+
+    if cleaned_df["Name"].duplicated().any():
+        duplicate_names = cleaned_df.loc[
+            cleaned_df["Name"].duplicated(),
+            "Name",
+        ].unique().tolist()
+
+        st.error(
+            "Duplicate player names are not allowed: "
+            + ", ".join(duplicate_names)
+        )
         st.stop()
 
     cleaned_df["Credits"] = pd.to_numeric(
@@ -492,76 +510,120 @@ if st.button(
         st.error("Captain and Vice-Captain cannot be the same player.")
         st.stop()
 
+    locked_indices = set(
+        cleaned_df.index[cleaned_df["Lock_In_All_Teams"] == True].tolist()
+    )
+
+    captain_index = None
+    vice_captain_index = None
+
+    if len(captain_players) == 1:
+        captain_index = captain_players.index[0]
+
+    if len(vice_captain_players) == 1:
+        vice_captain_index = vice_captain_players.index[0]
+
     previous_teams = st.session_state.all_previous_teams.copy()
+    previous_team_sets = [set(team) for team in previous_teams]
+
     new_lineups = []
+    selected_new_teams = []
 
     start_team_number = len(previous_teams) + 1
-    end_team_number = start_team_number + teams_per_click - 1
 
-    with st.spinner(
-        f"Generating teams {start_team_number} to {end_team_number}..."
+    player_indices = list(cleaned_df.index)
+
+    total_possible_combinations = 1
+    for value in range(
+        len(player_indices),
+        len(player_indices) - 11,
+        -1,
     ):
+        total_possible_combinations *= value
 
-        for batch_number in range(1, teams_per_click + 1):
+    for value in range(11, 0, -1):
+        total_possible_combinations //= value
 
-            team_number = start_team_number + batch_number - 1
+    st.warning(
+        f"Checking **{total_possible_combinations:,}** possible "
+        "11-player combinations. This may take time for larger pools."
+    )
 
-            prob = LpProblem(
-                f"Dream11_Unique_Team_{team_number}",
-                LpMaximize,
-            )
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-            player_vars = {
-                str(i): LpVariable(f"choice_{i}", cat="Binary")
-                for i in cleaned_df.index
-            }
+    checked_combinations = 0
 
-            # Objective: maximize credits used while staying within 100
-            prob += lpSum(
-                cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
-                for i in cleaned_df.index
-            )
+    with st.spinner("Generating all possible valid teams..."):
 
-            # Exactly 11 players
-            prob += lpSum(
-                player_vars[str(i)]
-                for i in cleaned_df.index
-            ) == 11
+        for combo in combinations(player_indices, 11):
 
-            # Maximum 100 credits
-            prob += lpSum(
-                cleaned_df.loc[i, "Credits"] * player_vars[str(i)]
-                for i in cleaned_df.index
-            ) <= 100.0
+            checked_combinations += 1
 
-            # Locked players must appear in every team
-            for i in cleaned_df.index:
-                if bool(cleaned_df.loc[i, "Lock_In_All_Teams"]):
-                    prob += player_vars[str(i)] == 1
+            if checked_combinations % 500 == 0:
+                progress = checked_combinations / total_possible_combinations
+                progress_bar.progress(min(progress, 1.0))
+
+                status_text.write(
+                    f"Checked {checked_combinations:,} / "
+                    f"{total_possible_combinations:,} combinations | "
+                    f"Valid teams found: {len(selected_new_teams):,}"
+                )
+
+            combo_set = set(combo)
+
+            # Locked players must be present
+            if not locked_indices.issubset(combo_set):
+                continue
+
+            # Captain must be present
+            if captain_index is not None and captain_index not in combo_set:
+                continue
+
+            # Vice-captain must be present
+            if (
+                vice_captain_index is not None
+                and vice_captain_index not in combo_set
+            ):
+                continue
+
+            combo_df = cleaned_df.loc[list(combo)]
+
+            total_credits = combo_df["Credits"].sum()
+
+            if total_credits > 100:
+                continue
 
             if "🔀 Two-Team Combination Mode" in optimizer_mode:
 
-                prob += lpSum(
-                    player_vars[str(i)]
-                    for i in cleaned_df.index
-                    if cleaned_df.loc[i, "Team"] == "Team A"
-                ) == team_a_count
+                actual_team_a_count = int(
+                    (combo_df["Team"] == "Team A").sum()
+                )
+                actual_team_b_count = int(
+                    (combo_df["Team"] == "Team B").sum()
+                )
 
-                prob += lpSum(
-                    player_vars[str(i)]
-                    for i in cleaned_df.index
-                    if cleaned_df.loc[i, "Team"] == "Team B"
-                ) == team_b_count
+                if (
+                    actual_team_a_count != team_a_count
+                    or actual_team_b_count != team_b_count
+                ):
+                    continue
+
+                role_counts = combo_df["Role"].value_counts().to_dict()
+
+                valid_roles = True
 
                 for role in ROLES:
-                    role_count = lpSum(
-                        player_vars[str(i)]
-                        for i in cleaned_df.index
-                        if cleaned_df.loc[i, "Role"] == role
-                    )
+                    if role_counts.get(role, 0) < 1:
+                        valid_roles = False
+                        break
 
-                    prob += role_count >= 1
-                    prob += role_count <= 8
+                    if role_counts.get(role, 0) > 8:
+                        valid_roles = False
+                        break
+
+                if not valid_roles:
+                    continue
 
             elif "🎛️ Sliders Mode" in optimizer_mode:
 
@@ -572,57 +634,67 @@ if st.button(
                     "BOWL": target_bowl,
                 }
 
+                role_counts = combo_df["Role"].value_counts().to_dict()
+
+                valid_roles = True
+
                 for role, target in role_targets.items():
-                    prob += lpSum(
-                        player_vars[str(i)]
-                        for i in cleaned_df.index
-                        if cleaned_df.loc[i, "Role"] == role
-                    ) == target
+                    if role_counts.get(role, 0) != target:
+                        valid_roles = False
+                        break
+
+                if not valid_roles:
+                    continue
 
             else:
+                # Lock Mode: keep a balanced basic rule
+                role_counts = combo_df["Role"].value_counts().to_dict()
+
+                valid_roles = True
 
                 for role in ROLES:
-                    role_count = lpSum(
-                        player_vars[str(i)]
-                        for i in cleaned_df.index
-                        if cleaned_df.loc[i, "Role"] == role
-                    )
+                    if role_counts.get(role, 0) < 1:
+                        valid_roles = False
+                        break
 
-                    prob += role_count >= 1
-                    prob += role_count <= 8
+                    if role_counts.get(role, 0) > 8:
+                        valid_roles = False
+                        break
 
-            # Prevent duplicate or near-duplicate teams from
-            # ALL previous generations
-            for previous_team in previous_teams:
-                prob += lpSum(
-                    player_vars[str(i)]
-                    for i in previous_team
-                ) <= max_allowed_overlap
+                if not valid_roles:
+                    continue
 
-            status = prob.solve(PULP_CBC_CMD(msg=False))
+            # Avoid teams already generated in earlier clicks
+            duplicate_of_previous = False
 
-            if LpStatus[status] != "Optimal":
-                if batch_number == 1:
-                    st.warning(
-                        "No more valid unique teams can be generated "
-                        "with your current settings."
-                    )
-                else:
-                    st.warning(
-                        f"Generated {len(new_lineups)} new unique teams. "
-                        "No further valid unique team is possible."
-                    )
-                break
+            for old_team_set in previous_team_sets:
+                overlap_count = len(combo_set & old_team_set)
 
-            selected_indices = [
-                i
-                for i in cleaned_df.index
-                if player_vars[str(i)].varValue == 1
-            ]
+                if overlap_count > max_allowed_overlap:
+                    duplicate_of_previous = True
+                    break
 
-            previous_teams.append(selected_indices)
+            if duplicate_of_previous:
+                continue
 
-            team_df = cleaned_df.loc[selected_indices].copy()
+            # Avoid near-duplicate teams within this generation
+            duplicate_within_new_teams = False
+
+            for new_team_set in selected_new_teams:
+                overlap_count = len(combo_set & new_team_set)
+
+                if overlap_count > max_allowed_overlap:
+                    duplicate_within_new_teams = True
+                    break
+
+            if duplicate_within_new_teams:
+                continue
+
+            selected_new_teams.append(combo_set)
+
+            team_number = start_team_number + len(selected_new_teams) - 1
+
+            team_df = cleaned_df.loc[list(combo)].copy()
             team_df = team_df.drop(
                 columns=["Lock_In_All_Teams", "Captain", "Vice_Captain"]
             )
@@ -630,18 +702,32 @@ if st.button(
 
             new_lineups.append((team_number, team_df))
 
-    # Save all generated teams
+            if len(selected_new_teams) >= max_teams_to_generate:
+                break
+
+    progress_bar.progress(1.0)
+    status_text.write(
+        f"Finished checking combinations. "
+        f"Valid teams generated: **{len(selected_new_teams):,}**"
+    )
+
+    # Save generated teams
+    previous_teams.extend([list(team) for team in selected_new_teams])
+
     st.session_state.all_previous_teams = previous_teams
     st.session_state.generated_lineups.extend(new_lineups)
 
     if new_lineups:
         st.success(
-            f"Successfully generated **{len(new_lineups)} new unique "
+            f"Successfully generated **{len(new_lineups):,} new unique "
             f"teams**. Total teams now: "
-            f"**{len(st.session_state.generated_lineups)}**."
+            f"**{len(st.session_state.generated_lineups):,}**."
         )
     else:
-        st.warning("No new unique teams could be generated.")
+        st.warning(
+            "No new valid unique teams could be generated with your "
+            "current settings."
+        )
 
 # ----------------------------
 # Download Excel: All Teams summary format
@@ -699,7 +785,7 @@ if st.session_state.generated_lineups:
 
     st.download_button(
         label=(
-            f"📥 Download All {total_teams} Generated Teams as Excel"
+            f"📥 Download All {total_teams:,} Generated Teams as Excel"
         ),
         data=excel_buffer.getvalue(),
         file_name=(
@@ -719,7 +805,7 @@ if st.session_state.generated_lineups:
 
     st.subheader(
         f"📋 All Generated Teams "
-        f"({len(st.session_state.generated_lineups)} total)"
+        f"({len(st.session_state.generated_lineups):,} total)"
     )
 
     selected_captain = None
